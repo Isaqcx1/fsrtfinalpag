@@ -25,6 +25,9 @@ function ProductoForm() {
   const [imagenPreview, setImagenPreview] = useState(IMAGEN_DEFAULT);
   const [cargando, setCargando] = useState(false);
   const [subiendoImagen, setSubiendoImagen] = useState(false);
+  const [variantes, setVariantes] = useState([]);
+  const [variantesInicializadas, setVariantesInicializadas] = useState(false);
+
 
   useEffect(() => {
     cargarDatosBase();
@@ -32,6 +35,8 @@ function ProductoForm() {
       cargarProducto();
     }
   }, [id]);
+
+
 
   const cargarDatosBase = async () => {
     try {
@@ -81,13 +86,26 @@ function ProductoForm() {
           imagen: data.imagen || ""
         };
 
-        console.log("🔵 [FRONTEND] FormData configurado:", formDataNuevo);
         setFormData(formDataNuevo);
 
         if (data.imagen) {
           setImagenPreview(data.imagen);
         }
+
+        // 👉 Evita duplicados
+        if (data.colores) {
+          setVariantes(
+            data.colores.map(c => ({
+              color_id: c.id_color,
+              stock: c.stock || 0
+            }))
+          );
+
+
+        }
       }
+
+
     } catch (error) {
       console.error("🔴 [FRONTEND] Error al cargar producto:", error);
       alert("Error al cargar el producto");
@@ -109,7 +127,7 @@ function ProductoForm() {
       const nuevoEstado = tallas.includes(tallaId)
         ? tallas.filter(id => id !== tallaId)
         : [...tallas, tallaId];
-      
+
       console.log("🔵 [FRONTEND] Nuevas tallas seleccionadas:", nuevoEstado);
       return {
         ...prev,
@@ -119,20 +137,37 @@ function ProductoForm() {
   };
 
   const handleColorToggle = (colorId) => {
-    console.log("🔵 [FRONTEND] Toggle color:", colorId);
     setFormData(prev => {
-      const colores = prev.colores_ids || [];
-      const nuevoEstado = colores.includes(colorId)
-        ? colores.filter(id => id !== colorId)
-        : [...colores, colorId];
-      
-      console.log("🔵 [FRONTEND] Nuevos colores seleccionados:", nuevoEstado);
-      return {
-        ...prev,
-        colores_ids: nuevoEstado
-      };
+      const yaSeleccionado = prev.colores_ids.includes(colorId);
+
+      if (yaSeleccionado) {
+        // 🔻 Si se desmarca → quitar color y variante
+        setVariantes(prevVar => prevVar.filter(v => v.color_id !== colorId));
+
+        return {
+          ...prev,
+          colores_ids: prev.colores_ids.filter(id => id !== colorId)
+        };
+      } else {
+        // 🔺 Si se marca → agregar color y crear variante en el acto
+        setVariantes(prevVar => {
+          // Para evitar duplicados
+          if (!prevVar.some(v => v.color_id === colorId)) {
+            return [...prevVar, { color_id: colorId, stock: 0 }];
+          }
+          return prevVar;
+        });
+
+        return {
+          ...prev,
+          colores_ids: [...prev.colores_ids, colorId]
+        };
+      }
     });
   };
+
+
+
 
   const handleImagenChange = async (e) => {
     const file = e.target.files[0];
@@ -210,10 +245,10 @@ function ProductoForm() {
       const method = esEdicion ? "PUT" : "POST";
 
       // Preparar arrays de tallas y colores
-      const tallasIds = Array.isArray(formData.tallas_ids) 
+      const tallasIds = Array.isArray(formData.tallas_ids)
         ? formData.tallas_ids.map(id => parseInt(id)).filter(id => !isNaN(id))
         : [];
-      
+
       const coloresIds = Array.isArray(formData.colores_ids)
         ? formData.colores_ids.map(id => parseInt(id)).filter(id => !isNaN(id))
         : [];
@@ -226,7 +261,8 @@ function ProductoForm() {
         categoria_id: parseInt(formData.categoria_id),
         tallas_ids: tallasIds,
         colores_ids: coloresIds,
-        imagen: formData.imagen || null
+        imagen: formData.imagen || null,
+        variantes
       };
 
       // LOG FRONTEND: Datos que se envían
@@ -440,6 +476,49 @@ function ProductoForm() {
                 })}
               </div>
             </div>
+
+            {variantes.length > 0 && (
+              <div style={styles.grupo}>
+                <label style={styles.label}>STOCK POR COLOR</label>
+
+                {variantes.map((v, index) => {
+                  const colorInfo = colores.find(c => c.id_color === v.color_id);
+
+                  return (
+                    <div key={v.color_id} style={{ marginBottom: "10px" }}>
+                      <strong>{colorInfo?.nombre}</strong>
+
+                      <div style={{ marginBottom: "10px" }}>
+                        <strong>{colorInfo?.nombre}</strong>
+                        <div style={{ marginBottom: "10px" }}>
+                          <strong>{colorInfo?.nombre}</strong>
+
+                          <input
+                            type="number"
+                            value={v.stock}
+                            onChange={(e) => {
+                              const nuevoStock = parseInt(e.target.value) || 0;
+
+                              setVariantes(prev =>
+                                prev.map(item =>
+                                  item.color_id === v.color_id
+                                    ? { ...item, stock: nuevoStock }
+                                    : item
+                                )
+                              );
+                            }}
+                            style={{ marginLeft: "10px", width: "80px" }}
+                          />
+                        </div>
+
+                      </div>
+
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
 
             <div style={styles.grupo}>
               <label style={styles.label}>IMAGEN</label>

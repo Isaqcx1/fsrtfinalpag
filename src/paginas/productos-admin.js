@@ -55,27 +55,31 @@ function ProductosAdmin() {
   };
 
   const handleEliminar = async (id) => {
-    if (!window.confirm("¿Está seguro de eliminar este producto? (Se cambiará a estado Inactivo)")) {
-      return;
-    }
+  if (!window.confirm("¿Seguro que desea eliminar este producto? Esta acción no se puede deshacer.")) {
+    return;
+  }
 
-    try {
-      const res = await fetch(`http://localhost:4000/productos-admin/${id}`, {
-        method: "DELETE"
-      });
+  try {
+    const res = await fetch(`http://localhost:4000/productos-admin/delete/${id}`, {
+      method: "DELETE",
+    });
 
-      const data = await res.json();
-      if (data.success) {
-        alert("Producto eliminado correctamente");
-        cargarProductos();
-      } else {
-        alert("Error al eliminar producto");
-      }
-    } catch (error) {
-      console.error("Error al eliminar:", error);
-      alert("Error al eliminar producto");
+    const data = await res.json();
+
+    if (data.success) {
+      alert("Producto eliminado correctamente");
+      cargarProductos();
+    } else {
+      alert("No se pudo eliminar el producto");
     }
-  };
+  } catch (error) {
+    console.error("Error al eliminar:", error);
+    alert("Error al eliminar producto");
+  }
+};
+
+
+
 
   const handleEditar = (id) => {
     navigate(`/productos-admin/editar/${id}`);
@@ -178,8 +182,8 @@ function ProductosAdmin() {
                             ...(p.estado === "Activo"
                               ? styles.badgeActivo
                               : p.estado === "Inactivo"
-                              ? styles.badgeInactivo
-                              : styles.badgePendiente)
+                                ? styles.badgeInactivo
+                                : styles.badgePendiente)
                           }}
                         >
                           {p.estado}
@@ -202,6 +206,9 @@ function ProductosAdmin() {
                           >
                             Eliminar
                           </button>
+
+
+
                         </div>
                       </td>
                     </tr>

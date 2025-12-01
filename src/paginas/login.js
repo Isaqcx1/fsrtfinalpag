@@ -31,7 +31,7 @@ function Login() {
 
         <button
           className="login-btn"
-          onClick={() => navigate("/loginadm")}
+          onClick={() => navigate("/productos-admin")}
         >
           Iniciar Sesion
         </button>

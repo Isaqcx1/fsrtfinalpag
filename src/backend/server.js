@@ -37,20 +37,32 @@ app.get("/db/health", async (req, res) => {
   }
 });
 
+
+
 app.get("/productos", async (req, res) => {
   try {
-    const result = await pool.query(`
+    const estado = req.query.estado || "Activo";
+
+    let query = `
       SELECT p.*, c.nombre AS categoria
       FROM Productos p
       JOIN Categorias c ON p.categoria_id = c.id_categoria
-    `);
+    `;
+
+    if (estado !== "Todos") {
+      query += ` WHERE p.estado = $1`;
+    }
+
+    const params = estado !== "Todos" ? [estado] : [];
+
+    const result = await pool.query(query, params);
     res.json(result.rows);
+
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: "Error al obtener productos" });
   }
 });
-
 
 app.get("/producto/:id", async (req, res) => {
   try {
@@ -63,9 +75,13 @@ app.get("/producto/:id", async (req, res) => {
       WHERE p.id_producto = $1
     `, [id]);
 
-    res.json(result.rows[0] || null);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: "Producto no encontrado" });
+    }
+
+    res.json(result.rows[0]);
   } catch (error) {
-    console.error(error);
+    console.error("Error en GET /producto/:id", error);
     res.status(500).json({ message: "Error al obtener producto" });
   }
 });
@@ -108,22 +124,74 @@ app.get("/producto/:id/colores", async (req, res) => {
 });
 
 
-app.get("/producto/:id/stock", async (req, res) => {
+// ----------------------------------------------------
+//   🔵 RUTA: Actualizar stock de una talla + color
+// ----------------------------------------------------
+app.put("/producto/:id/stock", async (req, res) => {
   try {
     const { id } = req.params;
+    const { talla, color, stock, actualizarColorCompleto } = req.body;
 
-    const result = await pool.query(`
-      SELECT i.*, t.talla, c.nombre AS color
-      FROM Inventario i
-      JOIN Tallas t ON i.id_talla = t.id_talla
-      JOIN Colores c ON i.id_color = c.id_color
-      WHERE i.producto_id = $1
-    `, [id]);
+    if (!talla || !color || stock === undefined) {
+      return res.status(400).json({ message: "Faltan datos" });
+    }
 
-    res.json(result.rows);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Error al obtener stock" });
+    // Buscar id de talla
+    const tallaRes = await pool.query(
+      `SELECT id_talla FROM Tallas WHERE talla = $1`,
+      [talla]
+    );
+    if (tallaRes.rows.length === 0)
+      return res.status(404).json({ message: "Talla no encontrada" });
+
+    // Buscar id de color
+    const colorRes = await pool.query(
+      `SELECT id_color FROM Colores WHERE nombre = $1`,
+      [color]
+    );
+    if (colorRes.rows.length === 0)
+      return res.status(404).json({ message: "Color no encontrado" });
+
+    const tallaId = tallaRes.rows[0].id_talla;
+    const colorId = colorRes.rows[0].id_color;
+
+    // Actualizar SOLO esa talla + color
+    const update = await pool.query(
+      `
+      UPDATE Inventario
+      SET stock_actual = $1, fecha_actualizacion = NOW()
+      WHERE producto_id = $2 AND id_talla = $3 AND id_color = $4
+      RETURNING *
+    `,
+      [stock, id, tallaId, colorId]
+    );
+
+    if (update.rows.length === 0) {
+      return res.status(404).json({ message: "No existe inventario para esta combinación" });
+    }
+
+    // 🌈 Actualizar TODO el color si el front lo pide
+    if (actualizarColorCompleto === true) {
+      await pool.query(
+        `
+        UPDATE Inventario
+        SET stock_actual = $1, fecha_actualizacion = NOW()
+        WHERE producto_id = $2 AND id_color = $3
+      `,
+        [stock, id, colorId]
+      );
+
+      console.log(`🟢 Stock del color ${color} actualizado para TODAS las tallas`);
+    }
+
+    res.json({
+      success: true,
+      inventario: update.rows[0]
+    });
+
+  } catch (error) {
+    console.error("❌ Error al actualizar stock:", error);
+    res.status(500).json({ message: "Error al actualizar stock" });
   }
 });
 
@@ -208,7 +276,7 @@ app.post("/pedido-completar", async (req, res) => {
         });
       }
 
-      
+
       const tallaRes = await client.query(
         `SELECT id_talla FROM Tallas WHERE talla = $1`,
         [tallaNombre]
@@ -219,7 +287,7 @@ app.post("/pedido-completar", async (req, res) => {
 
       const tallaId = tallaRes.rows[0].id_talla;
 
-      
+
       const colorRes = await client.query(
         `SELECT id_color FROM Colores WHERE nombre = $1`,
         [colorNombre]
@@ -230,7 +298,7 @@ app.post("/pedido-completar", async (req, res) => {
 
       const colorId = colorRes.rows[0].id_color;
 
-      
+
       await client.query(
         `INSERT INTO Detalle_Pedido 
              (pedido_id, producto_id, id_talla, id_color, cantidad, precio_unitario)
@@ -245,7 +313,7 @@ app.post("/pedido-completar", async (req, res) => {
         ]
       );
 
-     
+
       await client.query(
         `UPDATE Inventario 
          SET stock_actual = stock_actual - $1
@@ -254,7 +322,7 @@ app.post("/pedido-completar", async (req, res) => {
       );
     }
 
-    
+
     await client.query(
       `INSERT INTO Pagos (pedido_id, metodo_pago, monto)
        VALUES ($1, $2, $3)`,
@@ -434,13 +502,22 @@ app.get("/productos-admin/:id", async (req, res) => {
     );
     console.log("🟡 [BACKEND] Tallas del producto:", tallasResult.rows);
 
-    // Obtener colores del producto
+    // Obtener colores del producto con stock REAL
     const coloresResult = await pool.query(
-      `SELECT c.* FROM Producto_Colores pc
-       JOIN Colores c ON pc.id_color = c.id_color
-       WHERE pc.id_producto = $1`,
+      `SELECT 
+      c.id_color,
+      c.nombre,
+      c.codigo_hex,
+      COALESCE(i.stock_actual, 0) AS stock
+    FROM Producto_Colores pc
+    JOIN Colores c ON pc.id_color = c.id_color
+    LEFT JOIN Inventario i 
+      ON i.id_color = c.id_color
+      AND i.producto_id = $1
+    WHERE pc.id_producto = $1`,
       [id]
     );
+
     console.log("🟡 [BACKEND] Colores del producto:", coloresResult.rows);
 
     // Obtener inventario
@@ -480,41 +557,11 @@ app.post("/productos-admin", async (req, res) => {
   try {
     const { nombre, descripcion, precio, estado, categoria_id, tallas_ids, colores_ids, imagen } = req.body;
 
-    // LOG BACKEND: Datos recibidos
-    console.log("🟢 [BACKEND] POST /productos-admin - Datos recibidos:", {
-      nombre,
-      descripcion,
-      precio,
-      estado,
-      categoria_id,
-      tallas_ids,
-      colores_ids,
-      imagen,
-      tipo_tallas_ids: typeof tallas_ids,
-      tipo_colores_ids: typeof colores_ids,
-      es_array_tallas: Array.isArray(tallas_ids),
-      es_array_colores: Array.isArray(colores_ids)
-    });
-
-    // Validaciones
-    if (!nombre || !descripcion || !precio || !estado || !categoria_id) {
-      console.log("🔴 [BACKEND] Validación fallida: Faltan campos obligatorios");
-      return res.status(400).json({ message: "Faltan campos obligatorios" });
-    }
-
-    if (precio <= 0) {
-      console.log("🔴 [BACKEND] Validación fallida: Precio inválido");
-      return res.status(400).json({ message: "El precio debe ser mayor a 0" });
-    }
-
-    if (!["Activo", "Inactivo", "Pendiente de actualización"].includes(estado)) {
-      console.log("🔴 [BACKEND] Validación fallida: Estado inválido");
-      return res.status(400).json({ message: "Estado inválido" });
-    }
-
     await client.query("BEGIN");
 
-    // Insertar producto
+    // ------------------------------------------------------------------
+    // 🔵 INSERTAR PRODUCTO
+    // ------------------------------------------------------------------
     const productoResult = await client.query(
       `INSERT INTO Productos (nombre, descripcion, precio, estado, categoria_id, imagen)
        VALUES ($1, $2, $3, $4, $5, $6)
@@ -523,66 +570,88 @@ app.post("/productos-admin", async (req, res) => {
     );
 
     const productoId = productoResult.rows[0].id_producto;
-    console.log("✅ [BACKEND] Producto creado con ID:", productoId);
 
-    // Asociar tallas (múltiples)
-    if (Array.isArray(tallas_ids) && tallas_ids.length > 0) {
-      console.log("🟢 [BACKEND] Insertando tallas:", tallas_ids);
+
+
+    // ------------------------------------------------------------------
+    // 🟣 INSERTAR TALLAS SI NO EXISTEN
+    // ------------------------------------------------------------------
+    if (Array.isArray(tallas_ids)) {
       for (const tallaId of tallas_ids) {
-        const tallaIdInt = parseInt(tallaId);
-        if (!isNaN(tallaIdInt)) {
-          const insertResult = await client.query(
-            `INSERT INTO Producto_Tallas (id_producto, id_talla) VALUES ($1, $2)
-             ON CONFLICT DO NOTHING`,
-            [productoId, tallaIdInt]
+
+        // Verificar existencia
+        const existe = await client.query(
+          `SELECT 1 FROM Producto_Tallas 
+           WHERE id_producto = $1 AND id_talla = $2`,
+          [productoId, tallaId]
+        );
+
+        if (existe.rows.length === 0) {
+          await client.query(
+            `INSERT INTO Producto_Tallas (id_producto, id_talla)
+             VALUES ($1, $2)`,
+            [productoId, tallaId]
           );
-          console.log(`  ✅ Talla ${tallaIdInt} insertada`);
-        } else {
-          console.log(`  ⚠️ Talla inválida (no es número): ${tallaId}`);
         }
       }
-    } else {
-      console.log("⚠️ [BACKEND] No se proporcionaron tallas o el array está vacío");
     }
 
-    // Asociar colores (múltiples)
-    if (Array.isArray(colores_ids) && colores_ids.length > 0) {
-      console.log("🟢 [BACKEND] Insertando colores:", colores_ids);
+
+
+    // ------------------------------------------------------------------
+    // 🟢 INSERTAR COLORES SI NO EXISTEN
+    // ------------------------------------------------------------------
+    if (Array.isArray(colores_ids)) {
       for (const colorId of colores_ids) {
-        const colorIdInt = parseInt(colorId);
-        if (!isNaN(colorIdInt)) {
-          const insertResult = await client.query(
-            `INSERT INTO Producto_Colores (id_producto, id_color) VALUES ($1, $2)
-             ON CONFLICT DO NOTHING`,
-            [productoId, colorIdInt]
+
+        // Verificar existencia
+        const existe = await client.query(
+          `SELECT 1 FROM Producto_Colores 
+           WHERE id_producto = $1 AND id_color = $2`,
+          [productoId, colorId]
+        );
+
+        if (existe.rows.length === 0) {
+          await client.query(
+            `INSERT INTO Producto_Colores (id_producto, id_color)
+             VALUES ($1, $2)`,
+            [productoId, colorId]
           );
-          console.log(`  ✅ Color ${colorIdInt} insertado`);
-        } else {
-          console.log(`  ⚠️ Color inválido (no es número): ${colorId}`);
         }
       }
-    } else {
-      console.log("⚠️ [BACKEND] No se proporcionaron colores o el array está vacío");
     }
 
-    // Verificar resultados finales
-    const tallasFinales = await client.query(
-      `SELECT id_talla FROM Producto_Tallas WHERE id_producto = $1`,
-      [productoId]
-    );
-    const coloresFinales = await client.query(
-      `SELECT id_color FROM Producto_Colores WHERE id_producto = $1`,
-      [productoId]
-    );
-    console.log("✅ [BACKEND] Estado final - Tallas:", tallasFinales.rows, "Colores:", coloresFinales.rows);
 
-    // Registrar en historial
-    await client.query(
-      `INSERT INTO Historial_Productos (id_producto, usuario, campo_modificado, valor_nuevo)
-       VALUES ($1, $2, $3, $4)`,
-      [productoId, "Sistema", "Creación", "Producto creado"]
-    );
 
+    // ------------------------------------------------------------------
+    // 🟡 GENERAR INVENTARIO (talla × color) SI NO EXISTE
+    // ------------------------------------------------------------------
+    if (Array.isArray(tallas_ids) && Array.isArray(colores_ids)) {
+      for (const tallaId of tallas_ids) {
+        for (const colorId of colores_ids) {
+
+          const existeInv = await client.query(
+            `SELECT 1 FROM Inventario 
+             WHERE producto_id = $1 AND id_talla = $2 AND id_color = $3`,
+            [productoId, tallaId, colorId]
+          );
+
+          if (existeInv.rows.length === 0) {
+            await client.query(
+              `INSERT INTO Inventario (producto_id, id_talla, id_color, stock_actual)
+               VALUES ($1, $2, $3, 0)`,
+              [productoId, tallaId, colorId]
+            );
+          }
+        }
+      }
+    }
+
+
+
+    // ------------------------------------------------------------------
+    // 🟤 FINALIZAR TRANSACCIÓN
+    // ------------------------------------------------------------------
     await client.query("COMMIT");
 
     res.json({ success: true, id_producto: productoId });
@@ -595,6 +664,7 @@ app.post("/productos-admin", async (req, res) => {
     client.release();
   }
 });
+
 
 // Actualizar producto
 app.put("/productos-admin/:id", async (req, res) => {
@@ -726,6 +796,42 @@ app.put("/productos-admin/:id", async (req, res) => {
           console.log(`  ⚠️ Color inválido (no es número): ${colorId}`);
         }
       }
+      // 🔵 REGENERAR INVENTARIO PARA TALLA x COLOR
+      for (const colorId of colores_ids) {
+        for (const tallaId of tallas_ids) {
+
+          // 🔵 REGENERAR INVENTARIO SIN ON CONFLICT
+for (const colorId of colores_ids) {
+  for (const tallaId of tallas_ids) {
+
+    // 1️⃣ Verificar si existe ese inventario
+    const existe = await client.query(
+      `SELECT 1 FROM Inventario
+       WHERE producto_id = $1 AND id_talla = $2 AND id_color = $3`,
+      [id, tallaId, colorId]
+    );
+
+    // 2️⃣ Si no existe, lo creamos
+    if (existe.rows.length === 0) {
+      await client.query(
+        `INSERT INTO Inventario (producto_id, id_talla, id_color, stock_actual)
+         VALUES ($1, $2, $3, 0)`,
+        [id, tallaId, colorId]
+      );
+      console.log(`  🟢 Inventario creado Talla ${tallaId} - Color ${colorId}`);
+    } else {
+      console.log(`  ⚪ Inventario YA EXISTE Talla ${tallaId} - Color ${colorId}`);
+    }
+
+  }
+}
+
+
+        }
+      }
+
+      console.log("🟢 Inventario sincronizado con tallas y colores");
+
     } else {
       console.log("⚠️ [BACKEND] No se proporcionaron colores o el array está vacío");
     }
@@ -816,18 +922,62 @@ app.delete("/productos-admin/:id", async (req, res) => {
   }
 });
 
+app.delete('/productos-admin/delete/:id', async (req, res) => {
+  const id = req.params.id;
+  console.log("🚨 DELETE REAL RECIBIDO:", id);
+
+  try {
+    await pool.query('BEGIN');
+
+    // 1. Eliminar historial
+    await pool.query(
+      'DELETE FROM historial_productos WHERE id_producto = $1',
+      [id]
+    );
+
+    // 2. Eliminar detalles de pedidos
+    await pool.query(
+      'DELETE FROM detalle_pedido WHERE producto_id = $1',
+      [id]
+    );
+
+    // 3. Eliminar inventario
+    await pool.query(
+      'DELETE FROM inventario WHERE producto_id = $1',
+      [id]
+    );
+
+    // 4. Eliminar tallas
+    await pool.query(
+      'DELETE FROM producto_tallas WHERE id_producto = $1',
+      [id]
+    );
+
+    // 5. Eliminar colores
+    await pool.query(
+      'DELETE FROM producto_colores WHERE id_producto = $1',
+      [id]
+    );
+
+    // 6. Finalmente eliminar producto
+    await pool.query(
+      'DELETE FROM productos WHERE id_producto = $1',
+      [id]
+    );
+
+    await pool.query('COMMIT');
+
+    res.json({ success: true, message: "Producto eliminado correctamente" });
+
+  } catch (error) {
+    await pool.query('ROLLBACK');
+    console.error("🔥 ERROR AL ELIMINAR:", error);
+    res.status(500).json({ success: false, message: "Error al eliminar el producto" });
+  }
+});
 
 
 
-
-
-
-
-
-
-
-
-// Servidor
 app.listen(4000, () => {
   console.log("Servidor backend corriendo en http://localhost:4000");
 });

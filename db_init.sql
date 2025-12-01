@@ -212,3 +212,4 @@ CREATE TABLE Historial_Productos (
     valor_nuevo TEXT,
     FOREIGN KEY (id_producto) REFERENCES Productos(id_producto)
 );
+
