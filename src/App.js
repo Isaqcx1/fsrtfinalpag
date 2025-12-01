@@ -8,6 +8,8 @@ import { CartProvider } from "./context/CartContext";
 import PagoFinal from "./paginas/pagofinal.js";
 import PagoFinal2 from "./paginas/pagofinal2.js"; 
 import Login from "./paginas/login.js";
+import ProductosAdmin from "./paginas/productos-admin.js";
+import ProductoForm from "./paginas/producto-form.js";
 
 function AppContent() {
   const location = useLocation();
@@ -31,6 +33,9 @@ function AppContent() {
         <Route path="/checkout" element={<PagoFinal />} />
         <Route path="/login" element={<Login />} />
         <Route path="/pagofinal2" element={<PagoFinal2 />} />
+        <Route path="/productos-admin" element={<ProductosAdmin />} />
+        <Route path="/productos-admin/nuevo" element={<ProductoForm />} />
+        <Route path="/productos-admin/editar/:id" element={<ProductoForm />} />
       </Routes>
     </>
   );

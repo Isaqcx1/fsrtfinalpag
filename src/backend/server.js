@@ -1,10 +1,41 @@
 const express = require("express");
 const cors = require("cors");
 const pool = require("./db");
+const { validarConexion } = require("./db");
+const multer = require("multer");
+const cloudinary = require("cloudinary").v2;
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// Configuración de Cloudinary
+cloudinary.config({
+  cloud_name: "dwnbx1pdw",
+  api_key: "529189883251453",
+  api_secret: "cGoF2V9bDgAvzViqb4Ubw7-bic0",
+});
+
+// Configuración de Multer (almacenamiento en memoria para Cloudinary)
+const storage = multer.memoryStorage();
+const upload = multer({ storage });
+
+// Endpoint para verificar la conexión con la base de datos
+app.get("/db/health", async (req, res) => {
+  try {
+    const result = await pool.query("SELECT NOW() as server_time, version() as db_version");
+    res.json({
+      status: "connected",
+      server_time: result.rows[0].server_time,
+      db_version: result.rows[0].db_version.split(" ")[0] + " " + result.rows[0].db_version.split(" ")[1]
+    });
+  } catch (error) {
+    res.status(500).json({
+      status: "disconnected",
+      error: error.message
+    });
+  }
+});
 
 app.get("/productos", async (req, res) => {
   try {
@@ -238,6 +269,393 @@ app.post("/pedido-completar", async (req, res) => {
     await client.query("ROLLBACK");
     console.error("❌ ERROR pedido-completar:", error);
     res.status(500).json({ success: false, message: "Error al completar pedido" });
+  } finally {
+    client.release();
+  }
+});
+
+// ========== ENDPOINTS PARA MANTENIMIENTO DE PRODUCTOS ==========
+
+// Endpoint para subir imagen a Cloudinary
+app.post("/subir-imagen", upload.single("imagen"), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: "No se proporcionó ninguna imagen" });
+    }
+
+    // Subir a Cloudinary usando el buffer
+    const result = await new Promise((resolve, reject) => {
+      const uploadStream = cloudinary.uploader.upload_stream(
+        {
+          folder: "productos",
+        },
+        (error, result) => {
+          if (error) reject(error);
+          else resolve(result);
+        }
+      );
+      uploadStream.end(req.file.buffer);
+    });
+
+    res.json({ url: result.secure_url });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Error subiendo imagen" });
+  }
+});
+
+// Obtener todas las categorías
+app.get("/categorias", async (req, res) => {
+  try {
+    const result = await pool.query("SELECT * FROM Categorias ORDER BY nombre");
+    res.json(result.rows);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Error al obtener categorías" });
+  }
+});
+
+// Obtener todas las tallas
+app.get("/tallas", async (req, res) => {
+  try {
+    const result = await pool.query("SELECT * FROM Tallas ORDER BY id_talla");
+    res.json(result.rows);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Error al obtener tallas" });
+  }
+});
+
+// Obtener todos los colores
+app.get("/colores", async (req, res) => {
+  try {
+    const result = await pool.query("SELECT * FROM Colores ORDER BY nombre");
+    res.json(result.rows);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Error al obtener colores" });
+  }
+});
+
+// Listar productos con paginación y filtros (para administración)
+app.get("/productos-admin", async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = 10;
+    const offset = (page - 1) * limit;
+    const categoriaId = req.query.categoria_id;
+
+    let query = `
+      SELECT 
+        p.id_producto,
+        p.nombre,
+        p.precio,
+        p.estado,
+        p.imagen,
+        c.nombre AS categoria,
+        COALESCE(SUM(i.stock_actual), 0) AS stock_total,
+        STRING_AGG(DISTINCT t.talla, ', ') AS tallas
+      FROM Productos p
+      JOIN Categorias c ON p.categoria_id = c.id_categoria
+      LEFT JOIN Inventario i ON p.id_producto = i.producto_id
+      LEFT JOIN Producto_Tallas pt ON p.id_producto = pt.id_producto
+      LEFT JOIN Tallas t ON pt.id_talla = t.id_talla
+    `;
+
+    const params = [];
+    if (categoriaId) {
+      query += ` WHERE p.categoria_id = $1`;
+      params.push(categoriaId);
+    }
+
+    query += ` GROUP BY p.id_producto, p.nombre, p.precio, p.estado, p.imagen, c.nombre`;
+
+    // Contar total de productos
+    let countQuery = `
+      SELECT COUNT(DISTINCT p.id_producto) as total
+      FROM Productos p
+    `;
+    if (categoriaId) {
+      countQuery += ` WHERE p.categoria_id = $1`;
+    }
+
+    const countResult = await pool.query(countQuery, categoriaId ? [categoriaId] : []);
+    const total = parseInt(countResult.rows[0].total);
+
+    query += ` ORDER BY p.id_producto DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+    params.push(limit, offset);
+
+    const result = await pool.query(query, params);
+
+    res.json({
+      productos: result.rows,
+      paginacion: {
+        pagina_actual: page,
+        total_paginas: Math.ceil(total / limit),
+        total_productos: total,
+        productos_por_pagina: limit
+      }
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Error al obtener productos" });
+  }
+});
+
+// Obtener un producto completo para edición
+app.get("/productos-admin/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Obtener producto
+    const productoResult = await pool.query(
+      `SELECT p.*, c.nombre AS categoria_nombre
+       FROM Productos p
+       JOIN Categorias c ON p.categoria_id = c.id_categoria
+       WHERE p.id_producto = $1`,
+      [id]
+    );
+
+    if (productoResult.rows.length === 0) {
+      return res.status(404).json({ message: "Producto no encontrado" });
+    }
+
+    const producto = productoResult.rows[0];
+
+    // Obtener tallas del producto
+    const tallasResult = await pool.query(
+      `SELECT t.* FROM Producto_Tallas pt
+       JOIN Tallas t ON pt.id_talla = t.id_talla
+       WHERE pt.id_producto = $1`,
+      [id]
+    );
+
+    // Obtener colores del producto
+    const coloresResult = await pool.query(
+      `SELECT c.* FROM Producto_Colores pc
+       JOIN Colores c ON pc.id_color = c.id_color
+       WHERE pc.id_producto = $1`,
+      [id]
+    );
+
+    // Obtener inventario
+    const inventarioResult = await pool.query(
+      `SELECT i.*, t.talla, c.nombre AS color_nombre
+       FROM Inventario i
+       JOIN Tallas t ON i.id_talla = t.id_talla
+       JOIN Colores c ON i.id_color = c.id_color
+       WHERE i.producto_id = $1`,
+      [id]
+    );
+
+    res.json({
+      ...producto,
+      tallas: tallasResult.rows,
+      colores: coloresResult.rows,
+      inventario: inventarioResult.rows
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Error al obtener producto" });
+  }
+});
+
+// Crear nuevo producto
+app.post("/productos-admin", async (req, res) => {
+  const client = await pool.connect();
+
+  try {
+    const { nombre, descripcion, precio, estado, categoria_id, talla_id, color_id, stock, imagen } = req.body;
+
+    // Validaciones
+    if (!nombre || !descripcion || !precio || !estado || !categoria_id) {
+      return res.status(400).json({ message: "Faltan campos obligatorios" });
+    }
+
+    if (precio <= 0) {
+      return res.status(400).json({ message: "El precio debe ser mayor a 0" });
+    }
+
+    if (!["Activo", "Inactivo", "Pendiente de actualización"].includes(estado)) {
+      return res.status(400).json({ message: "Estado inválido" });
+    }
+
+    await client.query("BEGIN");
+
+    // Insertar producto
+    const productoResult = await client.query(
+      `INSERT INTO Productos (nombre, descripcion, precio, estado, categoria_id, imagen)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id_producto`,
+      [nombre, descripcion, precio, estado, categoria_id, imagen || null]
+    );
+
+    const productoId = productoResult.rows[0].id_producto;
+
+    // Asociar talla
+    if (talla_id) {
+      await client.query(
+        `INSERT INTO Producto_Tallas (id_producto, id_talla) VALUES ($1, $2)
+         ON CONFLICT DO NOTHING`,
+        [productoId, talla_id]
+      );
+    }
+
+    // Asociar color
+    if (color_id) {
+      await client.query(
+        `INSERT INTO Producto_Colores (id_producto, id_color) VALUES ($1, $2)
+         ON CONFLICT DO NOTHING`,
+        [productoId, color_id]
+      );
+    }
+
+    // Crear inventario si se proporciona stock
+    if (talla_id && color_id && stock !== undefined) {
+      await client.query(
+        `INSERT INTO Inventario (producto_id, id_talla, id_color, stock_actual)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (producto_id, id_talla, id_color) 
+         DO UPDATE SET stock_actual = $4`,
+        [productoId, talla_id, color_id, stock]
+      );
+    }
+
+    // Registrar en historial
+    await client.query(
+      `INSERT INTO Historial_Productos (id_producto, usuario, campo_modificado, valor_nuevo)
+       VALUES ($1, $2, $3, $4)`,
+      [productoId, "Sistema", "Creación", "Producto creado"]
+    );
+
+    await client.query("COMMIT");
+
+    res.json({ success: true, id_producto: productoId });
+
+  } catch (error) {
+    await client.query("ROLLBACK");
+    console.error(error);
+    res.status(500).json({ message: "Error al crear producto" });
+  } finally {
+    client.release();
+  }
+});
+
+// Actualizar producto
+app.put("/productos-admin/:id", async (req, res) => {
+  const client = await pool.connect();
+
+  try {
+    const { id } = req.params;
+    const { nombre, descripcion, precio, estado, categoria_id, imagen } = req.body;
+
+    // Validaciones
+    if (!nombre || !descripcion || !precio || !estado || !categoria_id) {
+      return res.status(400).json({ message: "Faltan campos obligatorios" });
+    }
+
+    if (precio <= 0) {
+      return res.status(400).json({ message: "El precio debe ser mayor a 0" });
+    }
+
+    if (!["Activo", "Inactivo", "Pendiente de actualización"].includes(estado)) {
+      return res.status(400).json({ message: "Estado inválido" });
+    }
+
+    await client.query("BEGIN");
+
+    // Obtener valores anteriores para historial
+    const productoAnterior = await client.query(
+      `SELECT nombre, descripcion, precio, estado, categoria_id, imagen
+       FROM Productos WHERE id_producto = $1`,
+      [id]
+    );
+
+    if (productoAnterior.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ message: "Producto no encontrado" });
+    }
+
+    const anterior = productoAnterior.rows[0];
+
+    // Actualizar producto
+    await client.query(
+      `UPDATE Productos 
+       SET nombre = $1, descripcion = $2, precio = $3, estado = $4, categoria_id = $5, imagen = $6
+       WHERE id_producto = $7`,
+      [nombre, descripcion, precio, estado, categoria_id, imagen || anterior.imagen, id]
+    );
+
+    // Registrar cambios en historial
+    const cambios = [];
+    if (anterior.nombre !== nombre) cambios.push({ campo: "nombre", anterior: anterior.nombre, nuevo: nombre });
+    if (anterior.descripcion !== descripcion) cambios.push({ campo: "descripcion", anterior: anterior.descripcion, nuevo: descripcion });
+    if (anterior.precio !== precio) cambios.push({ campo: "precio", anterior: anterior.precio, nuevo: precio });
+    if (anterior.estado !== estado) cambios.push({ campo: "estado", anterior: anterior.estado, nuevo: estado });
+    if (anterior.categoria_id !== categoria_id) cambios.push({ campo: "categoria_id", anterior: anterior.categoria_id, nuevo: categoria_id });
+
+    for (const cambio of cambios) {
+      await client.query(
+        `INSERT INTO Historial_Productos (id_producto, usuario, campo_modificado, valor_anterior, valor_nuevo)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [id, "Sistema", cambio.campo, String(cambio.anterior), String(cambio.nuevo)]
+      );
+    }
+
+    await client.query("COMMIT");
+
+    res.json({ success: true });
+
+  } catch (error) {
+    await client.query("ROLLBACK");
+    console.error(error);
+    res.status(500).json({ message: "Error al actualizar producto" });
+  } finally {
+    client.release();
+  }
+});
+
+// Eliminación lógica (cambiar estado a Inactivo)
+app.delete("/productos-admin/:id", async (req, res) => {
+  const client = await pool.connect();
+
+  try {
+    const { id } = req.params;
+
+    await client.query("BEGIN");
+
+    // Verificar que el producto existe
+    const producto = await client.query(
+      `SELECT estado FROM Productos WHERE id_producto = $1`,
+      [id]
+    );
+
+    if (producto.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ message: "Producto no encontrado" });
+    }
+
+    // Cambiar estado a Inactivo
+    await client.query(
+      `UPDATE Productos SET estado = 'Inactivo' WHERE id_producto = $1`,
+      [id]
+    );
+
+    // Registrar en historial
+    await client.query(
+      `INSERT INTO Historial_Productos (id_producto, usuario, campo_modificado, valor_anterior, valor_nuevo)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [id, "Sistema", "estado", producto.rows[0].estado, "Inactivo"]
+    );
+
+    await client.query("COMMIT");
+
+    res.json({ success: true });
+
+  } catch (error) {
+    await client.query("ROLLBACK");
+    console.error(error);
+    res.status(500).json({ message: "Error al eliminar producto" });
   } finally {
     client.release();
   }

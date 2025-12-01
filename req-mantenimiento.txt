@@ -1,0 +1,64 @@
+Consideraciones:
+
+a. la estructura de la base de datos se encuentra en el archivo db_init.sql
+b. el servidor backend se encuentra en el archivo server.js, aqui se manejan todos los endpoints.
+c. las demas carpetas de la carpeta src son las que tienen el frontend.
+
+
+
+1. Se requiere adicionar el mantenimiento de productos:
+
+
+Propósito & Alcance
+
+
+
+Reglas de Negocio
+•	Cada producto debe tener un ID_PRODUCTO único generado automáticamente por el sistema.
+•	Los campos NOMBRE, DESCRIPCION, PRECIO, ESTADOy CATEGORIA_ID son obligatorios para registrar un producto.
+•	El campo PRECIO debe ser mayor a 0 y expresado en moneda válida.
+•	Estado del producto:
+El atributo ESTADO solo puede tener los valores: Activo, Inactivo o Pendiente de actualización.
+•	Actualización mensual:
+Todos los productos deben ser revisados y actualizados al menos una vez al mes. Si un producto no se actualiza dentro del plazo, el sistema cambia su estado a Pendiente de actualización.
+•	Control de cambios:
+Toda modificación realizada debe registrar la fecha y el usuario responsable.
+•	Eliminación lógica:
+Los productos no se eliminan del sistema, solo se cambian a estado Inactivo.
+•	Validación de datos:
+Antes de guardar o actualizar información, el sistema valida que no existan campos vacíos o valores no permitidos.
+El sistema debe mantener un historial de cambios para cada producto, con detalle de modificaciones realizadas.
+
+
+
+
+La primera pantalla debe tener el listado de productos con los siguientes campos:
+- ID_PRODUCTO
+- NOMBRE
+- PRECIO
+- ESTADO
+- TALLA
+- CATEGORIA
+- STOCK
+- ACCIONES (editar, eliminar)
+
+El listado de productos debe ser paginado, con 10 productos por pagina. 
+El listado de productos debe tener encima de la grilla labels seleccionables para filtrar por categoria
+
+
+
+Al crear un producto se debe tener la siguiente interfaz:
+- NOMBRE: como input de tipo text
+- DESCRIPCION: como text area
+- PRECIO: como input de tipo number con dos decimales
+- ESTADO: Activo / Inactivo. como radio button, pero se almacena en BD como varchar.
+- CATEGORIA: como select con las categorias de la base de datos
+- TALLA: como select con las tallas de la base de datos
+- COLOR: como select con los colores de la base de datos
+- STOCK: como input de tipo number
+
+Para almacenar la imagen del producto, debe utilizarse el enpoint para subir la imagen a cloudinary.
+
+Los colores deben ser seleccionados de la base de datos de colores. Las tallas deben ser seleccionadas de la base de datos de tallas.
+
+
