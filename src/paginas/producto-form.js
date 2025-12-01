@@ -14,9 +14,8 @@ function ProductoForm() {
     precio: "",
     estado: "Activo",
     categoria_id: "",
-    talla_id: "",
-    color_id: "",
-    stock: "",
+    tallas_ids: [],
+    colores_ids: [],
     imagen: ""
   });
 
@@ -58,28 +57,39 @@ function ProductoForm() {
 
   const cargarProducto = async () => {
     try {
+      console.log("🔵 [FRONTEND] Cargando producto con ID:", id);
       const res = await fetch(`http://localhost:4000/productos-admin/${id}`);
       const data = await res.json();
 
+      console.log("🔵 [FRONTEND] Datos recibidos del producto:", {
+        data,
+        tallas: data.tallas,
+        colores: data.colores,
+        tallas_ids_mapped: data.tallas ? data.tallas.map(t => t.id_talla) : [],
+        colores_ids_mapped: data.colores ? data.colores.map(c => c.id_color) : []
+      });
+
       if (data) {
-        setFormData({
+        const formDataNuevo = {
           nombre: data.nombre || "",
           descripcion: data.descripcion || "",
           precio: data.precio || "",
           estado: data.estado || "Activo",
           categoria_id: data.categoria_id || "",
-          talla_id: data.tallas && data.tallas.length > 0 ? data.tallas[0].id_talla : "",
-          color_id: data.colores && data.colores.length > 0 ? data.colores[0].id_color : "",
-          stock: data.inventario && data.inventario.length > 0 ? data.inventario[0].stock_actual : "",
+          tallas_ids: data.tallas ? data.tallas.map(t => t.id_talla) : [],
+          colores_ids: data.colores ? data.colores.map(c => c.id_color) : [],
           imagen: data.imagen || ""
-        });
+        };
+
+        console.log("🔵 [FRONTEND] FormData configurado:", formDataNuevo);
+        setFormData(formDataNuevo);
 
         if (data.imagen) {
           setImagenPreview(data.imagen);
         }
       }
     } catch (error) {
-      console.error("Error al cargar producto:", error);
+      console.error("🔴 [FRONTEND] Error al cargar producto:", error);
       alert("Error al cargar el producto");
     }
   };
@@ -90,6 +100,38 @@ function ProductoForm() {
       ...prev,
       [name]: value
     }));
+  };
+
+  const handleTallaToggle = (tallaId) => {
+    console.log("🔵 [FRONTEND] Toggle talla:", tallaId);
+    setFormData(prev => {
+      const tallas = prev.tallas_ids || [];
+      const nuevoEstado = tallas.includes(tallaId)
+        ? tallas.filter(id => id !== tallaId)
+        : [...tallas, tallaId];
+      
+      console.log("🔵 [FRONTEND] Nuevas tallas seleccionadas:", nuevoEstado);
+      return {
+        ...prev,
+        tallas_ids: nuevoEstado
+      };
+    });
+  };
+
+  const handleColorToggle = (colorId) => {
+    console.log("🔵 [FRONTEND] Toggle color:", colorId);
+    setFormData(prev => {
+      const colores = prev.colores_ids || [];
+      const nuevoEstado = colores.includes(colorId)
+        ? colores.filter(id => id !== colorId)
+        : [...colores, colorId];
+      
+      console.log("🔵 [FRONTEND] Nuevos colores seleccionados:", nuevoEstado);
+      return {
+        ...prev,
+        colores_ids: nuevoEstado
+      };
+    });
   };
 
   const handleImagenChange = async (e) => {
@@ -167,17 +209,36 @@ function ProductoForm() {
 
       const method = esEdicion ? "PUT" : "POST";
 
+      // Preparar arrays de tallas y colores
+      const tallasIds = Array.isArray(formData.tallas_ids) 
+        ? formData.tallas_ids.map(id => parseInt(id)).filter(id => !isNaN(id))
+        : [];
+      
+      const coloresIds = Array.isArray(formData.colores_ids)
+        ? formData.colores_ids.map(id => parseInt(id)).filter(id => !isNaN(id))
+        : [];
+
       const body = {
         nombre: formData.nombre.trim(),
         descripcion: formData.descripcion.trim(),
         precio: parseFloat(formData.precio),
         estado: formData.estado,
         categoria_id: parseInt(formData.categoria_id),
-        talla_id: formData.talla_id ? parseInt(formData.talla_id) : null,
-        color_id: formData.color_id ? parseInt(formData.color_id) : null,
-        stock: formData.stock ? parseInt(formData.stock) : null,
+        tallas_ids: tallasIds,
+        colores_ids: coloresIds,
         imagen: formData.imagen || null
       };
+
+      // LOG FRONTEND: Datos que se envían
+      console.log("🔵 [FRONTEND] Enviando datos:", {
+        method,
+        url,
+        body,
+        formDataOriginal: {
+          tallas_ids: formData.tallas_ids,
+          colores_ids: formData.colores_ids
+        }
+      });
 
       const res = await fetch(url, {
         method,
@@ -189,6 +250,13 @@ function ProductoForm() {
 
       const data = await res.json();
 
+      // LOG FRONTEND: Respuesta del servidor
+      console.log("🔵 [FRONTEND] Respuesta del servidor:", {
+        status: res.status,
+        ok: res.ok,
+        data
+      });
+
       if (data.success || res.ok) {
         alert(esEdicion ? "Producto actualizado correctamente" : "Producto creado correctamente");
         navigate("/productos-admin");
@@ -196,7 +264,7 @@ function ProductoForm() {
         alert(data.message || "Error al guardar el producto");
       }
     } catch (error) {
-      console.error("Error al guardar:", error);
+      console.error("🔴 [FRONTEND] Error al guardar:", error);
       alert("Error al guardar el producto");
     } finally {
       setCargando(false);
@@ -314,49 +382,63 @@ function ProductoForm() {
           {/* Columna derecha */}
           <div style={styles.columna}>
             <div style={styles.grupo}>
-              <label style={styles.label}>TALLA</label>
-              <select
-                name="talla_id"
-                value={formData.talla_id}
-                onChange={handleChange}
-                style={styles.select}
-              >
-                <option value="">Seleccione una talla</option>
+              <label style={styles.label}>TALLAS</label>
+              <div style={styles.tallasContainer}>
                 {tallas.map(t => (
-                  <option key={t.id_talla} value={t.id_talla}>
+                  <label
+                    key={t.id_talla}
+                    style={{
+                      ...styles.tallaLabel,
+                      ...(formData.tallas_ids.includes(t.id_talla) ? styles.tallaLabelSeleccionada : {})
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={formData.tallas_ids.includes(t.id_talla)}
+                      onChange={() => handleTallaToggle(t.id_talla)}
+                      style={styles.checkbox}
+                    />
                     {t.talla}
-                  </option>
+                  </label>
                 ))}
-              </select>
+              </div>
             </div>
 
             <div style={styles.grupo}>
-              <label style={styles.label}>COLOR</label>
-              <select
-                name="color_id"
-                value={formData.color_id}
-                onChange={handleChange}
-                style={styles.select}
-              >
-                <option value="">Seleccione un color</option>
-                {colores.map(c => (
-                  <option key={c.id_color} value={c.id_color}>
-                    {c.nombre}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div style={styles.grupo}>
-              <label style={styles.label}>STOCK</label>
-              <input
-                type="number"
-                name="stock"
-                value={formData.stock}
-                onChange={handleChange}
-                style={styles.input}
-                min="0"
-              />
+              <label style={styles.label}>COLORES</label>
+              <div style={styles.coloresContainer}>
+                {colores.map(c => {
+                  const isSelected = formData.colores_ids.includes(c.id_color);
+                  return (
+                    <div
+                      key={c.id_color}
+                      style={styles.colorItem}
+                      onClick={() => handleColorToggle(c.id_color)}
+                      onMouseEnter={(e) => {
+                        if (!isSelected) {
+                          e.currentTarget.querySelector('div').style.transform = 'scale(1.1)';
+                        }
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.querySelector('div').style.transform = 'scale(1)';
+                      }}
+                    >
+                      <div
+                        style={{
+                          ...styles.colorCircle,
+                          backgroundColor: c.codigo_hex || "#000000",
+                          border: isSelected
+                            ? "3px solid #000"
+                            : "2px solid #ccc",
+                          transform: isSelected ? "scale(1.1)" : "scale(1)"
+                        }}
+                        title={c.nombre}
+                      />
+                      <span style={styles.colorNombre}>{c.nombre}</span>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
 
             <div style={styles.grupo}>
@@ -484,6 +566,56 @@ const styles = {
     gap: "8px",
     cursor: "pointer",
     fontSize: "14px"
+  },
+  tallasContainer: {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: "10px"
+  },
+  tallaLabel: {
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+    padding: "8px 15px",
+    border: "2px solid #ccc",
+    borderRadius: "5px",
+    cursor: "pointer",
+    fontSize: "14px",
+    background: "#fff",
+    transition: "all 0.2s"
+  },
+  tallaLabelSeleccionada: {
+    borderColor: "#000",
+    background: "#f0f0f0",
+    fontWeight: "bold"
+  },
+  checkbox: {
+    cursor: "pointer"
+  },
+  coloresContainer: {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: "15px"
+  },
+  colorItem: {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    gap: "5px",
+    cursor: "pointer"
+  },
+  colorCircle: {
+    width: "50px",
+    height: "50px",
+    borderRadius: "50%",
+    cursor: "pointer",
+    transition: "all 0.2s",
+    boxShadow: "0 2px 4px rgba(0,0,0,0.2)"
+  },
+  colorNombre: {
+    fontSize: "12px",
+    textAlign: "center",
+    maxWidth: "60px"
   },
   imagenContainer: {
     display: "flex",

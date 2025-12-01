@@ -25,7 +25,8 @@ CREATE TABLE Tallas (
 -- Tabla Colores
 CREATE TABLE Colores (
     id_color SERIAL PRIMARY KEY,
-    nombre VARCHAR(50) NOT NULL
+    nombre VARCHAR(50) NOT NULL,
+    codigo_hex VARCHAR(7) NOT NULL DEFAULT '#000000'
 );
 
 -- Tabla Producto_Tallas
@@ -125,8 +126,13 @@ INSERT INTO Tallas (talla) VALUES
 ('S'), ('M'), ('L'), ('XL');
 
 -- Colores
-INSERT INTO Colores (nombre) VALUES
-('Negro'), ('Blanco'), ('Azul'), ('Beige'), ('Verde'), ('Rojo');
+INSERT INTO Colores (nombre, codigo_hex) VALUES
+('Negro', '#000000'), 
+('Blanco', '#FFFFFF'), 
+('Azul', '#0000FF'), 
+('Beige', '#F5F5DC'), 
+('Verde', '#008000'), 
+('Rojo', '#FF0000');
 
 -- Productos
 INSERT INTO Productos (nombre, descripcion, precio, estado, categoria_id) VALUES
