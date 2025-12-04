@@ -178,9 +178,7 @@ app.get("/producto/:id/colores", async (req, res) => {
 });
 
 
-// ----------------------------------------------------
-//   🔵 RUTA: Actualizar stock de una talla + color
-// ----------------------------------------------------
+
 app.put("/producto/:id/stock", async (req, res) => {
   try {
     const { id } = req.params;
@@ -401,7 +399,7 @@ app.post("/pedido-completar", async (req, res) => {
   }
 });
 
-// ========== ENDPOINTS PARA MANTENIMIENTO DE PRODUCTOS ==========
+
 
 // Endpoint para subir imagen a Cloudinary
 app.post("/subir-imagen", upload.single("imagen"), async (req, res) => {
@@ -561,8 +559,7 @@ app.get("/productos-admin/:id", async (req, res) => {
     );
     console.log("🟡 [BACKEND] Tallas del producto:", tallasResult.rows);
 
-    // Obtener colores del producto con stock REAL
-    // Obtener colores del producto con stock REAL (sumado)
+    
     // Obtener colores del producto con stock REAL (sumado por color)
     const coloresResult = await pool.query(
       `SELECT 
@@ -640,9 +637,7 @@ app.post("/productos-admin", async (req, res) => {
 
     await client.query("BEGIN");
 
-    // ------------------------------------------------------------------
-    // 🔵 INSERTAR PRODUCTO
-    // ------------------------------------------------------------------
+    
     const productoResult = await client.query(
       `INSERT INTO Productos (nombre, descripcion, precio, estado, categoria_id, imagen)
        VALUES ($1, $2, $3, $4, $5, $6)
@@ -654,9 +649,7 @@ app.post("/productos-admin", async (req, res) => {
 
 
 
-    // ------------------------------------------------------------------
-    // 🟣 INSERTAR TALLAS SI NO EXISTEN
-    // ------------------------------------------------------------------
+   
     if (Array.isArray(tallas_ids)) {
       for (const tallaId of tallas_ids) {
 
@@ -679,9 +672,7 @@ app.post("/productos-admin", async (req, res) => {
 
 
 
-    // ------------------------------------------------------------------
-    // 🟢 INSERTAR COLORES SI NO EXISTEN
-    // ------------------------------------------------------------------
+  
     if (Array.isArray(colores_ids)) {
       for (const colorId of colores_ids) {
 
@@ -704,13 +695,9 @@ app.post("/productos-admin", async (req, res) => {
 
 
 
-    // ------------------------------------------------------------------
-    // 🟡 GENERAR INVENTARIO (talla × color) SI NO EXISTE
-    // ------------------------------------------------------------------
+    
     if (Array.isArray(tallas_ids) && Array.isArray(colores_ids)) {
-      // ------------------------------------------------------------------
-      // 🟡 GUARDAR INVENTARIO (STOCK REAL DEL FRONTEND)
-      // ------------------------------------------------------------------
+      
       const variantes = req.body.variantes || {}; // { colorId: { tallaId: stock } }
 
       for (const colorId of Object.keys(variantes)) {
@@ -739,9 +726,8 @@ app.post("/productos-admin", async (req, res) => {
 
 
 
-    // ------------------------------------------------------------------
-    // 🟤 FINALIZAR TRANSACCIÓN
-    // ------------------------------------------------------------------
+    
+    
     await client.query("COMMIT");
 
     res.json({ success: true, id_producto: productoId });
@@ -815,9 +801,7 @@ app.put("/productos-admin/:id", async (req, res) => {
         ? colores.map(Number)
         : [];
 
-    // ==============================================
-    //   TALLAS
-    // ==============================================
+    
     const tallasExist = (
       await client.query(`SELECT id_talla FROM Producto_Tallas WHERE id_producto=$1`, [id])
     ).rows.map(r => Number(r.id_talla));
@@ -845,9 +829,7 @@ app.put("/productos-admin/:id", async (req, res) => {
       );
     }
 
-    // ==============================================
-    //   COLORES
-    // ==============================================
+   
     const coloresExist = (
       await client.query(`SELECT id_color FROM Producto_Colores WHERE id_producto=$1`, [id])
     ).rows.map(r => Number(r.id_color));
@@ -875,9 +857,7 @@ app.put("/productos-admin/:id", async (req, res) => {
       );
     }
 
-    // ==============================================
-    //   SINCRONIZAR INVENTARIO (NO BORRA STOCK)
-    // ==============================================
+    
     const tallasFinales = (
       await client.query(`SELECT id_talla FROM Producto_Tallas WHERE id_producto=$1`, [id])
     ).rows.map(r => Number(r.id_talla));
@@ -904,10 +884,8 @@ app.put("/productos-admin/:id", async (req, res) => {
       }
     }
 
-    // ==============================================
-    //   ACTUALIZAR STOCK SEGÚN FRONTEND
-    // ==============================================
-    const { variantes } = req.body;  // <-- aquí llegan tus stocks
+  
+    const { variantes } = req.body;  
 
     if (variantes && typeof variantes === "object") {
       for (const colorId of Object.keys(variantes)) {
