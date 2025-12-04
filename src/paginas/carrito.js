@@ -12,8 +12,8 @@ function Carrito() {
     0
   );
 
-  
-  
+
+
   const total = subtotal;
 
   const colorMap = {
@@ -28,7 +28,7 @@ function Carrito() {
   return (
     <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: "30px", padding: "40px" }}>
 
-      
+
       <div>
         <h2>Carrito de Compras ({cart.length} productos)</h2>
 
@@ -44,17 +44,22 @@ function Carrito() {
               gap: 20,
             }}
           >
-            
+
             <div>
               <img
-                src="/imgs/ropazz.png"
-                alt=""
+                src={
+                  item.imagen && item.imagen.trim() !== ""
+                    ? item.imagen
+                    : "/imgs/ropazz.png"
+                }
+                alt={item.nombre}
                 style={{ width: 120, borderRadius: 10 }}
               />
-              
+
+
             </div>
 
-            
+
             <div style={{ flex: 1 }}>
               <h3>{item.nombre}</h3>
 
@@ -84,7 +89,7 @@ function Carrito() {
         ))}
       </div>
 
-      
+
       <div style={{ border: "1px solid #ccc", padding: 20, borderRadius: 10 }}>
         <h3>Resumen de la Orden</h3>
 
@@ -112,8 +117,8 @@ function Carrito() {
               color: "red",
             }}
           >
-            
-            
+
+
           </div>
 
           <hr style={{ margin: "15px 0" }} />

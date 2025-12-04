@@ -213,3 +213,29 @@ CREATE TABLE Historial_Productos (
     FOREIGN KEY (id_producto) REFERENCES Productos(id_producto)
 );
 
+-- Tabla Parametrizaciones
+CREATE TABLE Parametrizaciones (
+    id_parametro SERIAL PRIMARY KEY,
+    codigo VARCHAR(100) UNIQUE NOT NULL,
+    nombre VARCHAR(200) NOT NULL,
+    valor NUMERIC(10,2) NOT NULL,
+    descripcion VARCHAR(500),
+    fecha_actualizacion TIMESTAMP DEFAULT NOW()
+);
+
+-- Tabla Promociones
+CREATE TABLE Promociones (
+    id_promocion SERIAL PRIMARY KEY,
+    categoria_id INT NOT NULL,
+    porcentaje_descuento NUMERIC(5,2) NOT NULL,
+    fecha_inicio DATE NOT NULL,
+    fecha_fin DATE NOT NULL,
+    activa BOOLEAN DEFAULT TRUE,
+    fecha_creacion TIMESTAMP DEFAULT NOW(),
+    FOREIGN KEY (categoria_id) REFERENCES Categorias(id_categoria)
+);
+
+-- Insertar parametrizaciones iniciales
+INSERT INTO Parametrizaciones (codigo, nombre, valor, descripcion) VALUES
+('TASA_CRECIMIENTO_MENSUAL', 'Tasa de Crecimiento Mensual (%)', 10.00, 'Tasa mínima de crecimiento mensual esperada'),
+('MINIMO_VENTAS_MENSUAL', 'Mínimo de Ventas Mensual', 5000.00, 'Monto mínimo de ventas mensuales esperado');

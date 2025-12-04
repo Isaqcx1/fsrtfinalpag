@@ -9,6 +9,59 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// ========== FUNCIONES HELPER PARA MANEJO DE FECHAS EN UTC-5 (LIMA) ==========
+
+// Función para obtener la fecha/hora actual en Lima (UTC-5) y convertirla a UTC para almacenar
+// Supabase almacena en UTC, así que obtenemos la hora UTC actual
+// Cuando leamos de la BD, convertiremos de UTC a Lima usando AT TIME ZONE 'America/Lima'
+const getLimaNowUTC = () => {
+  const ahora = new Date();
+
+  // Obtener la hora actual en UTC (getTime() siempre retorna UTC)
+  // toISOString() retorna la fecha en formato ISO 8601 en UTC
+  // Esto es lo que la BD espera recibir
+  return ahora.toISOString();
+};
+
+// Función para obtener la fecha actual (solo fecha, sin hora) en Lima y convertirla a UTC
+// Retorna el inicio del día actual en UTC (00:00:00 UTC)
+const getLimaTodayUTC = () => {
+  const ahora = new Date();
+
+  // Obtener la fecha actual en UTC
+  const year = ahora.getUTCFullYear();
+  const month = ahora.getUTCMonth();
+  const day = ahora.getUTCDate();
+
+  // Crear fecha que represente el inicio del día actual en UTC (00:00:00 UTC)
+  const fechaUTC = new Date(Date.UTC(year, month, day, 0, 0, 0, 0));
+
+  return fechaUTC.toISOString();
+};
+
+// Función helper para convertir fecha a zona horaria de Lima (UTC-5)
+const toLimaTime = (date) => {
+  if (!date) return null;
+
+  // Si es string, convertir a Date
+  const d = date instanceof Date ? date : new Date(date);
+
+  // Obtener la fecha en formato ISO
+  const isoString = d.toISOString();
+
+  // Retornar la fecha con timezone de Lima
+  // PostgreSQL manejará la conversión si usamos AT TIME ZONE
+  return isoString;
+};
+
+// Función para formatear fecha para INSERT/UPDATE en zona horaria de Lima
+const formatDateForLima = (date) => {
+  if (!date) return null;
+  const d = date instanceof Date ? date : new Date(date);
+  // Convertir a string ISO que PostgreSQL puede interpretar
+  return d.toISOString();
+};
+
 // Configuración de Cloudinary
 cloudinary.config({
   cloud_name: "dwnbx1pdw",
@@ -23,10 +76,11 @@ const upload = multer({ storage });
 // Endpoint para verificar la conexión con la base de datos
 app.get("/db/health", async (req, res) => {
   try {
-    const result = await pool.query("SELECT NOW() as server_time, version() as db_version");
+    const serverTime = getLimaNowUTC();
+    const result = await pool.query("SELECT version() as db_version");
     res.json({
       status: "connected",
-      server_time: result.rows[0].server_time,
+      server_time: serverTime,
       db_version: result.rows[0].db_version.split(" ")[0] + " " + result.rows[0].db_version.split(" ")[1]
     });
   } catch (error) {
@@ -130,63 +184,50 @@ app.get("/producto/:id/colores", async (req, res) => {
 app.put("/producto/:id/stock", async (req, res) => {
   try {
     const { id } = req.params;
-    const { talla, color, stock, actualizarColorCompleto } = req.body;
+    const { color_id, talla_id, stock } = req.body;
 
-    if (!talla || !color || stock === undefined) {
+    if (!color_id || !talla_id || stock === undefined) {
       return res.status(400).json({ message: "Faltan datos" });
     }
 
-    // Buscar id de talla
-    const tallaRes = await pool.query(
-      `SELECT id_talla FROM Tallas WHERE talla = $1`,
-      [talla]
-    );
-    if (tallaRes.rows.length === 0)
-      return res.status(404).json({ message: "Talla no encontrada" });
-
-    // Buscar id de color
-    const colorRes = await pool.query(
-      `SELECT id_color FROM Colores WHERE nombre = $1`,
-      [color]
-    );
-    if (colorRes.rows.length === 0)
-      return res.status(404).json({ message: "Color no encontrado" });
-
-    const tallaId = tallaRes.rows[0].id_talla;
-    const colorId = colorRes.rows[0].id_color;
-
-    // Actualizar SOLO esa talla + color
-    const update = await pool.query(
+    // 1️⃣ Verificar si existe el registro en inventario
+    const existe = await pool.query(
       `
-      UPDATE Inventario
-      SET stock_actual = $1, fecha_actualizacion = NOW()
-      WHERE producto_id = $2 AND id_talla = $3 AND id_color = $4
-      RETURNING *
-    `,
-      [stock, id, tallaId, colorId]
+      SELECT * FROM Inventario
+      WHERE producto_id = $1 AND id_color = $2 AND id_talla = $3
+      `,
+      [id, color_id, talla_id]
     );
 
-    if (update.rows.length === 0) {
-      return res.status(404).json({ message: "No existe inventario para esta combinación" });
-    }
-
-    // 🌈 Actualizar TODO el color si el front lo pide
-    if (actualizarColorCompleto === true) {
+    if (existe.rows.length > 0) {
+      // 2️⃣ Si existe → UPDATE
       await pool.query(
         `
         UPDATE Inventario
         SET stock_actual = $1, fecha_actualizacion = NOW()
-        WHERE producto_id = $2 AND id_color = $3
-      `,
-        [stock, id, colorId]
+        WHERE producto_id = $2 AND id_color = $3 AND id_talla = $4
+        `,
+        [stock, id, color_id, talla_id]
       );
 
-      console.log(`🟢 Stock del color ${color} actualizado para TODAS las tallas`);
+      return res.json({
+        success: true,
+        message: "Stock actualizado correctamente (UPDATE)"
+      });
     }
 
-    res.json({
+    // 3️⃣ Si NO existe → INSERT
+    await pool.query(
+      `
+      INSERT INTO Inventario (producto_id, id_color, id_talla, stock_actual, fecha_actualizacion)
+      VALUES ($1, $2, $3, $4, NOW())
+      `,
+      [id, color_id, talla_id, stock]
+    );
+
+    return res.json({
       success: true,
-      inventario: update.rows[0]
+      message: "Stock creado correctamente (INSERT)"
     });
 
   } catch (error) {
@@ -194,6 +235,8 @@ app.put("/producto/:id/stock", async (req, res) => {
     res.status(500).json({ message: "Error al actualizar stock" });
   }
 });
+
+
 
 
 
@@ -226,12 +269,13 @@ app.get("/producto/:id/stock-especifico", async (req, res) => {
 app.post("/pedidos", async (req, res) => {
   try {
     const { cliente_nombre, cliente_email, direccion, telefono, total } = req.body;
+    const fechaPedido = getLimaNowUTC();
 
     const result = await pool.query(
-      `INSERT INTO Pedidos (cliente_nombre, cliente_email, direccion, telefono, estado, total)
-       VALUES ($1, $2, $3, $4, 'Pendiente', $5)
+      `INSERT INTO Pedidos (cliente_nombre, cliente_email, direccion, telefono, estado, total, fecha_pedido)
+       VALUES ($1, $2, $3, $4, 'Pendiente', $5, $6)
        RETURNING id_pedido`,
-      [cliente_nombre, cliente_email, direccion, telefono, total]
+      [cliente_nombre, cliente_email, direccion, telefono, total, fechaPedido]
     );
 
     res.json({
@@ -320,14 +364,29 @@ app.post("/pedido-completar", async (req, res) => {
          WHERE producto_id = $2 AND id_talla = $3 AND id_color = $4`,
         [cantidad, productoId, tallaId, colorId]
       );
+
+      const fechaActualizacion = getLimaNowUTC();
+      await client.query(
+        `UPDATE Inventario 
+         SET stock_actual = stock_actual - $1, fecha_actualizacion = $5
+         WHERE producto_id = $2 AND id_talla = $3 AND id_color = $4`,
+        [cantidad, productoId, tallaId, colorId, fechaActualizacion]
+      );
     }
 
-
+    const fechaPago = getLimaNowUTC();
     await client.query(
-      `INSERT INTO Pagos (pedido_id, metodo_pago, monto)
-       VALUES ($1, $2, $3)`,
-      [pedido_id, metodo_pago, total]
+      `INSERT INTO Pagos (pedido_id, metodo_pago, monto, fecha_pago)
+       VALUES ($1, $2, $3, $4)`,
+      [pedido_id, metodo_pago, total, fechaPago]
     );
+
+    // Actualizar estado del pedido a "Pagado"
+    await client.query(
+      `UPDATE Pedidos SET estado = 'Pagado' WHERE id_pedido = $1`,
+      [pedido_id]
+    );
+
 
     await client.query("COMMIT");
 
@@ -503,20 +562,26 @@ app.get("/productos-admin/:id", async (req, res) => {
     console.log("🟡 [BACKEND] Tallas del producto:", tallasResult.rows);
 
     // Obtener colores del producto con stock REAL
+    // Obtener colores del producto con stock REAL (sumado)
+    // Obtener colores del producto con stock REAL (sumado por color)
     const coloresResult = await pool.query(
       `SELECT 
-      c.id_color,
-      c.nombre,
-      c.codigo_hex,
-      COALESCE(i.stock_actual, 0) AS stock
-    FROM Producto_Colores pc
-    JOIN Colores c ON pc.id_color = c.id_color
-    LEFT JOIN Inventario i 
-      ON i.id_color = c.id_color
-      AND i.producto_id = $1
-    WHERE pc.id_producto = $1`,
+     c.id_color,
+     c.nombre,
+     c.codigo_hex,
+     COALESCE(SUM(i.stock_actual), 0)::integer AS stock
+   FROM Producto_Colores pc
+   JOIN Colores c ON pc.id_color = c.id_color
+   LEFT JOIN Inventario i 
+     ON i.id_color = c.id_color
+     AND i.producto_id = $1
+   WHERE pc.id_producto = $1
+   GROUP BY c.id_color, c.nombre, c.codigo_hex
+   ORDER BY c.id_color`,
       [id]
     );
+
+
 
     console.log("🟡 [BACKEND] Colores del producto:", coloresResult.rows);
 
@@ -531,11 +596,27 @@ app.get("/productos-admin/:id", async (req, res) => {
     );
 
     const respuesta = {
-      ...producto,
+      // Datos base del producto
+      id_producto: producto.id_producto,
+      nombre: producto.nombre,
+      descripcion: producto.descripcion,
+      precio: producto.precio,
+      estado: producto.estado,
+      categoria_id: producto.categoria_id,
+      imagen: producto.imagen, // Asegúrate que este nombre coincide con tu BD
+
+      // Relaciones
       tallas: tallasResult.rows,
       colores: coloresResult.rows,
-      inventario: inventarioResult.rows
+
+      // Inventario exactamente en el formato que espera el frontend
+      inventario: inventarioResult.rows.map(i => ({
+        id_color: i.id_color,
+        id_talla: i.id_talla,
+        stock_actual: i.stock_actual
+      }))
     };
+
 
     console.log("✅ [BACKEND] Respuesta completa:", {
       ...respuesta,
@@ -627,25 +708,34 @@ app.post("/productos-admin", async (req, res) => {
     // 🟡 GENERAR INVENTARIO (talla × color) SI NO EXISTE
     // ------------------------------------------------------------------
     if (Array.isArray(tallas_ids) && Array.isArray(colores_ids)) {
-      for (const tallaId of tallas_ids) {
-        for (const colorId of colores_ids) {
+      // ------------------------------------------------------------------
+      // 🟡 GUARDAR INVENTARIO (STOCK REAL DEL FRONTEND)
+      // ------------------------------------------------------------------
+      const variantes = req.body.variantes || {}; // { colorId: { tallaId: stock } }
 
-          const existeInv = await client.query(
-            `SELECT 1 FROM Inventario 
-             WHERE producto_id = $1 AND id_talla = $2 AND id_color = $3`,
-            [productoId, tallaId, colorId]
+      for (const colorId of Object.keys(variantes)) {
+        for (const tallaId of Object.keys(variantes[colorId])) {
+          const stock = variantes[colorId][tallaId] ?? 0;
+
+          await client.query(
+            `INSERT INTO Inventario (producto_id, id_talla, id_color, stock_actual)
+       VALUES ($1, $2, $3, $4)`,
+            [productoId, Number(tallaId), Number(colorId), Number(stock)]
           );
-
-          if (existeInv.rows.length === 0) {
-            await client.query(
-              `INSERT INTO Inventario (producto_id, id_talla, id_color, stock_actual)
-               VALUES ($1, $2, $3, 0)`,
-              [productoId, tallaId, colorId]
-            );
-          }
         }
       }
+
+
     }
+
+
+    // Registrar en historial
+    const fechaCambio = getLimaNowUTC();
+    await client.query(
+      `INSERT INTO Historial_Productos (id_producto, usuario, campo_modificado, valor_nuevo, fecha_cambio)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [productoId, "Sistema", "Creación", "Producto creado", fechaCambio]
+    );
 
 
 
@@ -666,17 +756,13 @@ app.post("/productos-admin", async (req, res) => {
 });
 
 
-// Actualizar producto
 app.put("/productos-admin/:id", async (req, res) => {
   const client = await pool.connect();
 
   try {
     const { id } = req.params;
-    const { nombre, descripcion, precio, estado, categoria_id, tallas_ids, colores_ids, imagen } = req.body;
 
-    // LOG BACKEND: Datos recibidos
-    console.log("🟢 [BACKEND] PUT /productos-admin/:id - Datos recibidos:", {
-      id,
+    const {
       nombre,
       descripcion,
       precio,
@@ -684,168 +770,161 @@ app.put("/productos-admin/:id", async (req, res) => {
       categoria_id,
       tallas_ids,
       colores_ids,
-      imagen,
-      tipo_tallas_ids: typeof tallas_ids,
-      tipo_colores_ids: typeof colores_ids,
-      es_array_tallas: Array.isArray(tallas_ids),
-      es_array_colores: Array.isArray(colores_ids)
-    });
+      tallas,
+      colores,
+      imagen
+    } = req.body;
 
-    // Validaciones
     if (!nombre || !descripcion || !precio || !estado || !categoria_id) {
-      console.log("🔴 [BACKEND] Validación fallida: Faltan campos obligatorios");
       return res.status(400).json({ message: "Faltan campos obligatorios" });
-    }
-
-    if (precio <= 0) {
-      console.log("🔴 [BACKEND] Validación fallida: Precio inválido");
-      return res.status(400).json({ message: "El precio debe ser mayor a 0" });
-    }
-
-    if (!["Activo", "Inactivo", "Pendiente de actualización"].includes(estado)) {
-      console.log("🔴 [BACKEND] Validación fallida: Estado inválido");
-      return res.status(400).json({ message: "Estado inválido" });
     }
 
     await client.query("BEGIN");
 
-    // Obtener valores anteriores para historial
+    // Obtener datos anteriores
     const productoAnterior = await client.query(
-      `SELECT nombre, descripcion, precio, estado, categoria_id, imagen
-       FROM Productos WHERE id_producto = $1`,
+      `SELECT imagen FROM Productos WHERE id_producto = $1`,
       [id]
     );
 
     if (productoAnterior.rows.length === 0) {
       await client.query("ROLLBACK");
-      console.log("🔴 [BACKEND] Producto no encontrado:", id);
       return res.status(404).json({ message: "Producto no encontrado" });
     }
 
     const anterior = productoAnterior.rows[0];
 
-    // Actualizar producto
+    // Actualización de producto
     await client.query(
-      `UPDATE Productos 
-       SET nombre = $1, descripcion = $2, precio = $3, estado = $4, categoria_id = $5, imagen = $6
-       WHERE id_producto = $7`,
+      `UPDATE Productos
+       SET nombre=$1, descripcion=$2, precio=$3, estado=$4, categoria_id=$5, imagen=$6
+       WHERE id_producto=$7`,
       [nombre, descripcion, precio, estado, categoria_id, imagen || anterior.imagen, id]
     );
 
-    console.log("✅ [BACKEND] Producto actualizado");
+    // Normalizar arrays
+    const tallasBody = Array.isArray(tallas_ids)
+      ? tallas_ids.map(Number)
+      : Array.isArray(tallas)
+        ? tallas.map(Number)
+        : [];
 
-    // Obtener tallas existentes antes de eliminar
-    const tallasExistentes = await client.query(
-      `SELECT id_talla FROM Producto_Tallas WHERE id_producto = $1`,
-      [id]
-    );
-    console.log("🟡 [BACKEND] Tallas existentes antes de actualizar:", tallasExistentes.rows);
+    const coloresBody = Array.isArray(colores_ids)
+      ? colores_ids.map(Number)
+      : Array.isArray(colores)
+        ? colores.map(Number)
+        : [];
 
-    // Eliminar tallas existentes y agregar nuevas
-    const deleteTallasResult = await client.query(
-      `DELETE FROM Producto_Tallas WHERE id_producto = $1`,
-      [id]
-    );
-    console.log("🟡 [BACKEND] Tallas eliminadas:", deleteTallasResult.rowCount);
+    // ==============================================
+    //   TALLAS
+    // ==============================================
+    const tallasExist = (
+      await client.query(`SELECT id_talla FROM Producto_Tallas WHERE id_producto=$1`, [id])
+    ).rows.map(r => Number(r.id_talla));
 
-    if (Array.isArray(tallas_ids) && tallas_ids.length > 0) {
-      console.log("🟢 [BACKEND] Insertando tallas:", tallas_ids);
-      for (const tallaId of tallas_ids) {
-        const tallaIdInt = parseInt(tallaId);
-        if (!isNaN(tallaIdInt)) {
-          const insertResult = await client.query(
-            `INSERT INTO Producto_Tallas (id_producto, id_talla) VALUES ($1, $2)
-             ON CONFLICT DO NOTHING`,
-            [id, tallaIdInt]
-          );
-          console.log(`  ✅ Talla ${tallaIdInt} insertada`);
-        } else {
-          console.log(`  ⚠️ Talla inválida (no es número): ${tallaId}`);
-        }
-      }
-    } else {
-      console.log("⚠️ [BACKEND] No se proporcionaron tallas o el array está vacío");
-    }
+    const tallasAInsertar = tallasBody.filter(t => !tallasExist.includes(t));
+    const tallasAEliminar = tallasExist.filter(t => !tallasBody.includes(t));
 
-    // Obtener colores existentes antes de eliminar
-    const coloresExistentes = await client.query(
-      `SELECT id_color FROM Producto_Colores WHERE id_producto = $1`,
-      [id]
-    );
-    console.log("🟡 [BACKEND] Colores existentes antes de actualizar:", coloresExistentes.rows);
-
-    // Eliminar colores existentes y agregar nuevos
-    const deleteColoresResult = await client.query(
-      `DELETE FROM Producto_Colores WHERE id_producto = $1`,
-      [id]
-    );
-    console.log("🟡 [BACKEND] Colores eliminados:", deleteColoresResult.rowCount);
-
-    if (Array.isArray(colores_ids) && colores_ids.length > 0) {
-      console.log("🟢 [BACKEND] Insertando colores:", colores_ids);
-      for (const colorId of colores_ids) {
-        const colorIdInt = parseInt(colorId);
-        if (!isNaN(colorIdInt)) {
-          const insertResult = await client.query(
-            `INSERT INTO Producto_Colores (id_producto, id_color) VALUES ($1, $2)
-             ON CONFLICT DO NOTHING`,
-            [id, colorIdInt]
-          );
-          console.log(`  ✅ Color ${colorIdInt} insertado`);
-        } else {
-          console.log(`  ⚠️ Color inválido (no es número): ${colorId}`);
-        }
-      }
-      // 🔵 REGENERAR INVENTARIO PARA TALLA x COLOR
-      for (const colorId of colores_ids) {
-        for (const tallaId of tallas_ids) {
-
-          // 🔵 REGENERAR INVENTARIO SIN ON CONFLICT
-for (const colorId of colores_ids) {
-  for (const tallaId of tallas_ids) {
-
-    // 1️⃣ Verificar si existe ese inventario
-    const existe = await client.query(
-      `SELECT 1 FROM Inventario
-       WHERE producto_id = $1 AND id_talla = $2 AND id_color = $3`,
-      [id, tallaId, colorId]
-    );
-
-    // 2️⃣ Si no existe, lo creamos
-    if (existe.rows.length === 0) {
+    if (tallasAEliminar.length > 0) {
       await client.query(
-        `INSERT INTO Inventario (producto_id, id_talla, id_color, stock_actual)
-         VALUES ($1, $2, $3, 0)`,
-        [id, tallaId, colorId]
+        `DELETE FROM Inventario WHERE producto_id=$1 AND id_talla = ANY($2::int[])`,
+        [id, tallasAEliminar]
       );
-      console.log(`  🟢 Inventario creado Talla ${tallaId} - Color ${colorId}`);
-    } else {
-      console.log(`  ⚪ Inventario YA EXISTE Talla ${tallaId} - Color ${colorId}`);
+      await client.query(
+        `DELETE FROM Producto_Tallas WHERE id_producto=$1 AND id_talla = ANY($2::int[])`,
+        [id, tallasAEliminar]
+      );
     }
 
-  }
-}
+    for (const talla of tallasAInsertar) {
+      await client.query(
+        `INSERT INTO Producto_Tallas (id_producto,id_talla)
+         VALUES ($1,$2)
+         ON CONFLICT DO NOTHING`,
+        [id, talla]
+      );
+    }
 
+    // ==============================================
+    //   COLORES
+    // ==============================================
+    const coloresExist = (
+      await client.query(`SELECT id_color FROM Producto_Colores WHERE id_producto=$1`, [id])
+    ).rows.map(r => Number(r.id_color));
 
+    const coloresAInsertar = coloresBody.filter(c => !coloresExist.includes(c));
+    const coloresAEliminar = coloresExist.filter(c => !coloresBody.includes(c));
+
+    if (coloresAEliminar.length > 0) {
+      await client.query(
+        `DELETE FROM Inventario WHERE producto_id=$1 AND id_color = ANY($2::int[])`,
+        [id, coloresAEliminar]
+      );
+      await client.query(
+        `DELETE FROM Producto_Colores WHERE id_producto=$1 AND id_color = ANY($2::int[])`,
+        [id, coloresAEliminar]
+      );
+    }
+
+    for (const color of coloresAInsertar) {
+      await client.query(
+        `INSERT INTO Producto_Colores (id_producto,id_color)
+         VALUES ($1,$2)
+         ON CONFLICT DO NOTHING`,
+        [id, color]
+      );
+    }
+
+    // ==============================================
+    //   SINCRONIZAR INVENTARIO (NO BORRA STOCK)
+    // ==============================================
+    const tallasFinales = (
+      await client.query(`SELECT id_talla FROM Producto_Tallas WHERE id_producto=$1`, [id])
+    ).rows.map(r => Number(r.id_talla));
+
+    const coloresFinales = (
+      await client.query(`SELECT id_color FROM Producto_Colores WHERE id_producto=$1`, [id])
+    ).rows.map(r => Number(r.id_color));
+
+    for (const colorId of coloresFinales) {
+      for (const tallaId of tallasFinales) {
+        const existe = await client.query(
+          `SELECT 1 FROM Inventario 
+           WHERE producto_id=$1 AND id_talla=$2 AND id_color=$3`,
+          [id, tallaId, colorId]
+        );
+
+        if (existe.rows.length === 0) {
+          await client.query(
+            `INSERT INTO Inventario (producto_id, id_talla, id_color, stock_actual, ubicacion)
+             VALUES ($1,$2,$3,0,'Almacén A')`,
+            [id, tallaId, colorId]
+          );
         }
       }
-
-      console.log("🟢 Inventario sincronizado con tallas y colores");
-
-    } else {
-      console.log("⚠️ [BACKEND] No se proporcionaron colores o el array está vacío");
     }
 
-    // Verificar resultados finales
-    const tallasFinales = await client.query(
-      `SELECT id_talla FROM Producto_Tallas WHERE id_producto = $1`,
-      [id]
-    );
-    const coloresFinales = await client.query(
-      `SELECT id_color FROM Producto_Colores WHERE id_producto = $1`,
-      [id]
-    );
-    console.log("✅ [BACKEND] Estado final - Tallas:", tallasFinales.rows, "Colores:", coloresFinales.rows);
+    // ==============================================
+    //   ACTUALIZAR STOCK SEGÚN FRONTEND
+    // ==============================================
+    const { variantes } = req.body;  // <-- aquí llegan tus stocks
+
+    if (variantes && typeof variantes === "object") {
+      for (const colorId of Object.keys(variantes)) {
+        for (const tallaId of Object.keys(variantes[colorId])) {
+          const stockNuevo = variantes[colorId][tallaId];
+
+          await client.query(
+            `UPDATE Inventario
+             SET stock_actual = $1
+             WHERE producto_id = $2 
+             AND id_color = $3 
+             AND id_talla = $4`,
+            [stockNuevo, id, colorId, tallaId]
+          );
+        }
+      }
+    }
 
     // Registrar cambios en historial
     const cambios = [];
@@ -855,72 +934,30 @@ for (const colorId of colores_ids) {
     if (anterior.estado !== estado) cambios.push({ campo: "estado", anterior: anterior.estado, nuevo: estado });
     if (anterior.categoria_id !== categoria_id) cambios.push({ campo: "categoria_id", anterior: anterior.categoria_id, nuevo: categoria_id });
 
+    const fechaCambio = getLimaNowUTC();
     for (const cambio of cambios) {
       await client.query(
-        `INSERT INTO Historial_Productos (id_producto, usuario, campo_modificado, valor_anterior, valor_nuevo)
-         VALUES ($1, $2, $3, $4, $5)`,
-        [id, "Sistema", cambio.campo, String(cambio.anterior), String(cambio.nuevo)]
+        `INSERT INTO Historial_Productos (id_producto, usuario, campo_modificado, valor_anterior, valor_nuevo, fecha_cambio)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [id, "Sistema", cambio.campo, String(cambio.anterior), String(cambio.nuevo), fechaCambio]
       );
     }
 
-    await client.query("COMMIT");
 
+
+
+    await client.query("COMMIT");
     res.json({ success: true });
 
   } catch (error) {
     await client.query("ROLLBACK");
-    console.error(error);
+    console.error("🔴 Error actualizando producto:", error);
     res.status(500).json({ message: "Error al actualizar producto" });
   } finally {
     client.release();
   }
 });
 
-// Eliminación lógica (cambiar estado a Inactivo)
-app.delete("/productos-admin/:id", async (req, res) => {
-  const client = await pool.connect();
-
-  try {
-    const { id } = req.params;
-
-    await client.query("BEGIN");
-
-    // Verificar que el producto existe
-    const producto = await client.query(
-      `SELECT estado FROM Productos WHERE id_producto = $1`,
-      [id]
-    );
-
-    if (producto.rows.length === 0) {
-      await client.query("ROLLBACK");
-      return res.status(404).json({ message: "Producto no encontrado" });
-    }
-
-    // Cambiar estado a Inactivo
-    await client.query(
-      `UPDATE Productos SET estado = 'Inactivo' WHERE id_producto = $1`,
-      [id]
-    );
-
-    // Registrar en historial
-    await client.query(
-      `INSERT INTO Historial_Productos (id_producto, usuario, campo_modificado, valor_anterior, valor_nuevo)
-       VALUES ($1, $2, $3, $4, $5)`,
-      [id, "Sistema", "estado", producto.rows[0].estado, "Inactivo"]
-    );
-
-    await client.query("COMMIT");
-
-    res.json({ success: true });
-
-  } catch (error) {
-    await client.query("ROLLBACK");
-    console.error(error);
-    res.status(500).json({ message: "Error al eliminar producto" });
-  } finally {
-    client.release();
-  }
-});
 
 app.delete('/productos-admin/delete/:id', async (req, res) => {
   const id = req.params.id;
@@ -973,6 +1010,560 @@ app.delete('/productos-admin/delete/:id', async (req, res) => {
     await pool.query('ROLLBACK');
     console.error("🔥 ERROR AL ELIMINAR:", error);
     res.status(500).json({ success: false, message: "Error al eliminar el producto" });
+  }
+});
+
+app.put("/productos/:id/stock-color", async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { id } = req.params;
+    const { color_id, stock, aplicar_a_todas_tallas = true, talla_id } = req.body;
+
+    if (!color_id || typeof stock === "undefined") {
+      return res.status(400).json({ message: "Faltan parámetros color_id o stock" });
+    }
+
+    const stockInt = parseInt(stock, 10);
+    if (isNaN(stockInt) || stockInt < 0) {
+      return res.status(400).json({ message: "Stock inválido" });
+    }
+
+    await client.query("BEGIN");
+
+    const tallas = (
+      await client.query(`SELECT id_talla FROM Producto_Tallas WHERE id_producto=$1`, [id])
+    ).rows.map(r => Number(r.id_talla));
+
+    if (tallas.length === 0) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ message: "El producto no tiene tallas registradas" });
+    }
+
+    await client.query(
+      `INSERT INTO Producto_Colores (id_producto,id_color)
+       VALUES ($1,$2)
+       ON CONFLICT DO NOTHING`,
+      [id, color_id]
+    );
+
+    for (const talla of tallas) {
+      const existe = await client.query(
+        `SELECT 1 FROM Inventario WHERE producto_id=$1 AND id_talla=$2 AND id_color=$3`,
+        [id, talla, color_id]
+      );
+
+      if (existe.rows.length === 0) {
+        await client.query(
+          `INSERT INTO Inventario (producto_id,id_talla,id_color,stock_actual,ubicacion)
+           VALUES ($1,$2,$3,0,'Almacén A')`,
+          [id, talla, color_id]
+        );
+      }
+    }
+
+    // TODAS LAS TALLAS
+    if (aplicar_a_todas_tallas === true) {
+      await client.query(
+        `UPDATE Inventario
+         SET stock_actual=$1, fecha_actualizacion=NOW()
+         WHERE producto_id=$2 AND id_color=$3`,
+        [stockInt, id, color_id]
+      );
+
+      await client.query("COMMIT");
+      return res.json({ success: true, message: "Stock actualizado en todas las tallas" });
+    }
+
+    // SOLO UNA TALLA
+    if (talla_id) {
+      if (!tallas.includes(Number(talla_id))) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ message: "La talla no pertenece al producto" });
+      }
+
+      await client.query(
+        `UPDATE Inventario
+         SET stock_actual=$1, fecha_actualizacion=NOW()
+         WHERE producto_id=$2 AND id_color=$3 AND id_talla=$4`,
+        [stockInt, id, color_id, talla_id]
+      );
+
+      await client.query("COMMIT");
+      return res.json({ success: true, message: "Stock actualizado para la talla indicada" });
+    }
+
+    await client.query("ROLLBACK");
+    res.status(400).json({
+      message: "Debe indicar aplicar_a_todas_tallas=true o enviar talla_id"
+    });
+
+  } catch (error) {
+    await client.query("ROLLBACK");
+    console.error("Error stock-color:", error);
+    res.status(500).json({ message: "Error al actualizar stock por color" });
+  } finally {
+    client.release();
+  }
+});
+
+
+app.post("/productos/:id/crear-inventario-color", async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { id } = req.params;
+    const { color_id } = req.body;
+
+    if (!color_id) return res.status(400).json({ message: "Falta color_id" });
+
+    await client.query("BEGIN");
+
+    const prod = await client.query(`SELECT 1 FROM Productos WHERE id_producto=$1`, [id]);
+    if (prod.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ message: "Producto no encontrado" });
+    }
+
+    await client.query(
+      `INSERT INTO Producto_Colores (id_producto,id_color)
+       VALUES ($1,$2)
+       ON CONFLICT DO NOTHING`,
+      [id, color_id]
+    );
+
+    const tallas = (
+      await client.query(`SELECT id_talla FROM Producto_Tallas WHERE id_producto=$1`, [id])
+    ).rows.map(r => r.id_talla);
+
+    if (tallas.length === 0) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ message: "El producto no tiene tallas registradas" });
+    }
+
+    for (const talla of tallas) {
+      const existe = await client.query(
+        `SELECT 1 FROM Inventario WHERE producto_id=$1 AND id_talla=$2 AND id_color=$3`,
+        [id, talla, color_id]
+      );
+
+      if (existe.rows.length === 0) {
+        await client.query(
+          `INSERT INTO Inventario (producto_id,id_talla,id_color,stock_actual,ubicacion)
+           VALUES ($1,$2,$3,0,'Almacén A')`,
+          [id, talla, color_id]
+        );
+      }
+    }
+
+    await client.query("COMMIT");
+    res.json({ success: true });
+
+  } catch (error) {
+    await client.query("ROLLBACK");
+    console.error("Error crear inventario color:", error);
+    res.status(500).json({ message: "Error al crear inventario color" });
+  } finally {
+    client.release();
+  }
+});
+
+
+
+//DashBoard
+// Obtener estadísticas de ventas con filtro de tiempo
+app.get("/dashboard/ventas", async (req, res) => {
+  try {
+    const { periodo } = req.query || 'mes'; // 'dia', 'mes', 'año'
+
+    let fechaInicio;
+    const fechaFin = new Date();
+    fechaFin.setHours(23, 59, 59, 999);
+
+    switch (periodo) {
+      case 'dia':
+        fechaInicio = new Date();
+        fechaInicio.setDate(fechaInicio.getDate() - 1);
+        fechaInicio.setHours(0, 0, 0, 0);
+        break;
+      case 'mes':
+        fechaInicio = new Date();
+        fechaInicio.setMonth(fechaInicio.getMonth() - 1);
+        fechaInicio.setHours(0, 0, 0, 0);
+        break;
+      case 'año':
+        fechaInicio = new Date();
+        fechaInicio.setFullYear(fechaInicio.getFullYear() - 1);
+        fechaInicio.setHours(0, 0, 0, 0);
+        break;
+      default:
+        fechaInicio = new Date();
+        fechaInicio.setMonth(fechaInicio.getMonth() - 1);
+        fechaInicio.setHours(0, 0, 0, 0);
+    }
+
+    console.log("🔵 [DASHBOARD] Consultando ventas:", { periodo, fechaInicio, fechaFin });
+
+    // Ventas totales del período - usar total del pedido en lugar de monto del pago
+    const ventasResult = await pool.query(
+      `SELECT COALESCE(SUM(ped.total), 0) as total_ventas
+       FROM Pedidos ped
+       WHERE ped.estado = 'Pagado'
+       AND ped.fecha_pedido >= $1 AND ped.fecha_pedido <= $2`,
+      [fechaInicio, fechaFin]
+    );
+
+    const ventasTotales = parseFloat(ventasResult.rows[0].total_ventas || 0);
+    console.log("🔵 [DASHBOARD] Ventas totales encontradas:", ventasTotales);
+
+    // Ventas del mes anterior para calcular tasa de crecimiento
+    const mesAnteriorInicio = new Date(fechaInicio);
+    mesAnteriorInicio.setMonth(mesAnteriorInicio.getMonth() - 1);
+    const mesAnteriorFin = new Date(fechaInicio);
+    mesAnteriorFin.setHours(0, 0, 0, 0);
+
+    const ventasMesAnteriorResult = await pool.query(
+      `SELECT COALESCE(SUM(ped.total), 0) as total_ventas
+       FROM Pedidos ped
+       WHERE ped.estado = 'Pagado'
+       AND ped.fecha_pedido >= $1 AND ped.fecha_pedido < $2`,
+      [mesAnteriorInicio, mesAnteriorFin]
+    );
+
+    const ventasMesAnterior = parseFloat(ventasMesAnteriorResult.rows[0].total_ventas || 0);
+    console.log("🔵 [DASHBOARD] Ventas mes anterior:", ventasMesAnterior);
+
+    // Calcular tasa de crecimiento
+    let tasaCrecimiento = 0;
+    if (ventasMesAnterior > 0) {
+      tasaCrecimiento = ((ventasTotales - ventasMesAnterior) / ventasMesAnterior) * 100;
+    } else if (ventasTotales > 0) {
+      tasaCrecimiento = 100; // Crecimiento del 100% si no había ventas antes
+    }
+
+    // Categorías más vendidas (top 5)
+    const categoriasResult = await pool.query(
+      `SELECT 
+        c.nombre as categoria,
+        COUNT(DISTINCT dp.producto_id) as cantidad_productos,
+        SUM(dp.cantidad) as unidades_vendidas,
+        COALESCE(SUM(dp.subtotal), 0) as total_vendido
+       FROM Detalle_Pedido dp
+       JOIN Productos pr ON dp.producto_id = pr.id_producto
+       JOIN Categorias c ON pr.categoria_id = c.id_categoria
+       JOIN Pedidos ped ON dp.pedido_id = ped.id_pedido
+       WHERE ped.estado = 'Pagado'
+       AND ped.fecha_pedido >= $1 AND ped.fecha_pedido <= $2
+       GROUP BY c.id_categoria, c.nombre
+       ORDER BY total_vendido DESC
+       LIMIT 5`,
+      [fechaInicio, fechaFin]
+    );
+    console.log("🔵 [DASHBOARD] Categorías encontradas:", categoriasResult.rows.length);
+
+    // Obtener parámetros para comparar
+    const parametrosResult = await pool.query(
+      `SELECT codigo, valor FROM Parametrizaciones 
+       WHERE codigo IN ('MINIMO_VENTAS_MENSUAL', 'TASA_CRECIMIENTO_MENSUAL')`
+    );
+
+    console.log("🔵 [DASHBOARD] Parámetros encontrados:", parametrosResult.rows);
+
+    const parametros = {};
+    parametrosResult.rows.forEach(p => {
+      parametros[p.codigo] = parseFloat(p.valor);
+    });
+
+    console.log("🔵 [DASHBOARD] Parámetros procesados:", parametros);
+
+    // Calcular equivalente diario/semanal del mínimo mensual según el período
+    let minimoEsperado = parametros.MINIMO_VENTAS_MENSUAL || 5000;
+    if (periodo === 'dia') {
+      minimoEsperado = minimoEsperado / 30; // Aproximadamente diario
+    } else if (periodo === 'mes') {
+      minimoEsperado = minimoEsperado; // Mensual
+    } else if (periodo === 'año') {
+      minimoEsperado = minimoEsperado * 12; // Anual
+    }
+
+    console.log("🔵 [DASHBOARD] Mínimo esperado calculado:", minimoEsperado);
+
+    res.json({
+      ventas_totales: ventasTotales,
+      tasa_crecimiento: tasaCrecimiento,
+      categorias_mas_vendidas: categoriasResult.rows || [],
+      parametros: {
+        minimo_ventas: minimoEsperado,
+        tasa_crecimiento_minima: parametros.TASA_CRECIMIENTO_MENSUAL || 10
+      },
+      periodo: periodo || 'mes'
+    });
+  } catch (error) {
+    console.error("Error al obtener estadísticas de ventas:", error);
+    res.status(500).json({ message: "Error al obtener estadísticas" });
+  }
+});
+
+
+// Obtener ventas recientes (del día) con paginación
+app.get("/dashboard/ventas-recientes", async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = 10;
+    const offset = (page - 1) * limit;
+
+    const fechaHoy = new Date();
+    fechaHoy.setHours(0, 0, 0, 0);
+    const fechaManana = new Date(fechaHoy);
+    fechaManana.setDate(fechaManana.getDate() + 1);
+
+    console.log("🔵 [VENTAS-RECIENTES] Consultando ventas del día:", { fechaHoy, fechaManana });
+
+    // Contar total
+    const countResult = await pool.query(
+      `SELECT COUNT(DISTINCT p.id_pedido) as total
+       FROM Pedidos p
+       WHERE p.estado = 'Pagado'
+       AND p.fecha_pedido >= $1 AND p.fecha_pedido < $2`,
+      [fechaHoy, fechaManana]
+    );
+
+    const total = parseInt(countResult.rows[0].total || 0);
+    console.log("🔵 [VENTAS-RECIENTES] Total de ventas encontradas:", total);
+
+    // Obtener ventas
+    const ventasResult = await pool.query(
+      `SELECT 
+        p.id_pedido,
+        p.fecha_pedido,
+        p.total as monto,
+        p.cliente_nombre,
+        COALESCE(pag.metodo_pago, 'N/A') as metodo_pago,
+        pag.fecha_pago
+       FROM Pedidos p
+       LEFT JOIN Pagos pag ON p.id_pedido = pag.pedido_id
+       WHERE p.estado = 'Pagado'
+       AND p.fecha_pedido >= $1 AND p.fecha_pedido < $2
+       ORDER BY p.fecha_pedido DESC
+       LIMIT $3 OFFSET $4`,
+      [fechaHoy, fechaManana, limit, offset]
+    );
+
+    console.log("🔵 [VENTAS-RECIENTES] Ventas obtenidas:", ventasResult.rows.length);
+
+    res.json({
+      ventas: ventasResult.rows,
+      paginacion: {
+        pagina_actual: page,
+        total_paginas: Math.ceil(total / limit),
+        total_ventas: total,
+        ventas_por_pagina: limit
+      }
+    });
+  } catch (error) {
+    console.error("Error al obtener ventas recientes:", error);
+    res.status(500).json({ message: "Error al obtener ventas recientes" });
+  }
+});
+
+// Obtener detalle de una venta
+app.get("/dashboard/venta/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Obtener información del pedido
+    const pedidoResult = await pool.query(
+      `SELECT * FROM Pedidos WHERE id_pedido = $1`,
+      [id]
+    );
+
+    if (pedidoResult.rows.length === 0) {
+      return res.status(404).json({ message: "Venta no encontrada" });
+    }
+
+    // Obtener detalles del pedido
+    const detalleResult = await pool.query(
+      `SELECT 
+        dp.*,
+        pr.nombre as producto_nombre,
+        pr.imagen as producto_imagen,
+        t.talla,
+        c.nombre as color_nombre,
+        cat.nombre as categoria
+       FROM Detalle_Pedido dp
+       JOIN Productos pr ON dp.producto_id = pr.id_producto
+       JOIN Tallas t ON dp.id_talla = t.id_talla
+       JOIN Colores c ON dp.id_color = c.id_color
+       JOIN Categorias cat ON pr.categoria_id = cat.id_categoria
+       WHERE dp.pedido_id = $1`,
+      [id]
+    );
+
+    // Obtener información del pago
+    const pagoResult = await pool.query(
+      `SELECT * FROM Pagos WHERE pedido_id = $1`,
+      [id]
+    );
+
+    res.json({
+      pedido: pedidoResult.rows[0],
+      detalles: detalleResult.rows,
+      pago: pagoResult.rows[0] || null
+    });
+  } catch (error) {
+    console.error("Error al obtener detalle de venta:", error);
+    res.status(500).json({ message: "Error al obtener detalle de venta" });
+  }
+});
+
+// ========== ENDPOINTS PARA PARAMETRIZACIONES ==========
+
+// Obtener todas las parametrizaciones
+app.get("/parametrizaciones", async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT * FROM Parametrizaciones ORDER BY codigo`
+    );
+    res.json(result.rows);
+  } catch (error) {
+    console.error("Error al obtener parametrizaciones:", error);
+    res.status(500).json({ message: "Error al obtener parametrizaciones" });
+  }
+});
+
+// Actualizar parametrización
+app.put("/parametrizaciones/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { valor } = req.body;
+
+    if (valor === undefined || valor === null) {
+      return res.status(400).json({ message: "El valor es obligatorio" });
+    }
+
+    const fechaActualizacion = getLimaNowUTC();
+    const result = await pool.query(
+      `UPDATE Parametrizaciones 
+       SET valor = $1, fecha_actualizacion = $3
+       WHERE id_parametro = $2
+       RETURNING *`,
+      [valor, id, fechaActualizacion]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: "Parametrización no encontrada" });
+    }
+
+    res.json({ success: true, parametrizacion: result.rows[0] });
+  } catch (error) {
+    console.error("Error al actualizar parametrización:", error);
+    res.status(500).json({ message: "Error al actualizar parametrización" });
+  }
+});
+
+// ========== ENDPOINTS PARA PROMOCIONES ==========
+
+// Obtener promociones con paginación
+app.get("/promociones", async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = 10;
+    const offset = (page - 1) * limit;
+    const soloActivas = req.query.activas === 'true';
+
+    let query = `
+      SELECT 
+        pr.*,
+        c.nombre as categoria_nombre
+      FROM Promociones pr
+      JOIN Categorias c ON pr.categoria_id = c.id_categoria
+    `;
+
+    const params = [];
+    if (soloActivas) {
+      const fechaHoy = getLimaTodayUTC();
+      query += ` WHERE pr.activa = TRUE AND pr.fecha_fin >= $1::date`;
+      params.push(fechaHoy);
+    }
+
+    // Contar total
+    const countQuery = query.replace(/SELECT.*FROM/, 'SELECT COUNT(*) as total FROM');
+    const countResult = await pool.query(countQuery, params);
+    const total = parseInt(countResult.rows[0].total);
+
+    query += ` ORDER BY pr.fecha_creacion DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+    params.push(limit, offset);
+
+    const result = await pool.query(query, params);
+
+    res.json({
+      promociones: result.rows,
+      paginacion: {
+        pagina_actual: page,
+        total_paginas: Math.ceil(total / limit),
+        total_promociones: total,
+        promociones_por_pagina: limit
+      }
+    });
+  } catch (error) {
+    console.error("Error al obtener promociones:", error);
+    res.status(500).json({ message: "Error al obtener promociones" });
+  }
+});
+
+// Crear nueva promoción
+app.post("/promociones", async (req, res) => {
+  try {
+    console.log("🔵 [PROMOCIONES] POST recibido:", req.body);
+    const { categoria_id, porcentaje_descuento, fecha_inicio, fecha_fin } = req.body;
+
+    if (!categoria_id || porcentaje_descuento === undefined || porcentaje_descuento === null || !fecha_inicio || !fecha_fin) {
+      console.log("🔴 [PROMOCIONES] Faltan campos obligatorios");
+      return res.status(400).json({ message: "Faltan campos obligatorios" });
+    }
+
+    const porcentaje = parseFloat(porcentaje_descuento);
+    if (isNaN(porcentaje) || porcentaje < 0 || porcentaje > 100) {
+      console.log("🔴 [PROMOCIONES] Porcentaje inválido:", porcentaje);
+      return res.status(400).json({ message: "El porcentaje de descuento debe estar entre 0 y 100" });
+    }
+
+    if (new Date(fecha_fin) < new Date(fecha_inicio)) {
+      console.log("🔴 [PROMOCIONES] Fechas inválidas");
+      return res.status(400).json({ message: "La fecha de fin debe ser posterior a la fecha de inicio" });
+    }
+
+    const result = await pool.query(
+      `INSERT INTO Promociones (categoria_id, porcentaje_descuento, fecha_inicio, fecha_fin)
+       VALUES ($1, $2, $3, $4)
+       RETURNING *`,
+      [parseInt(categoria_id), porcentaje, fecha_inicio, fecha_fin]
+    );
+
+    console.log("✅ [PROMOCIONES] Promoción creada:", result.rows[0]);
+    res.json({ success: true, promocion: result.rows[0] });
+  } catch (error) {
+    console.error("🔴 [PROMOCIONES] Error al crear promoción:", error);
+    res.status(500).json({ message: "Error al crear promoción: " + error.message });
+  }
+});
+
+// Eliminar promoción
+app.delete("/promociones/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const result = await pool.query(
+      `DELETE FROM Promociones WHERE id_promocion = $1 RETURNING *`,
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: "Promoción no encontrada" });
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error("Error al eliminar promoción:", error);
+    res.status(500).json({ message: "Error al eliminar promoción" });
   }
 });
 

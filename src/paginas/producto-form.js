@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from "react";
+import React, { useState, useEffect, useCallback } from "react";
+
 import { useNavigate, useParams } from "react-router-dom";
 
 const IMAGEN_DEFAULT = "/imgs/ropazz.png";
@@ -26,19 +27,16 @@ function ProductoForm() {
   const [cargando, setCargando] = useState(false);
   const [subiendoImagen, setSubiendoImagen] = useState(false);
   const [variantes, setVariantes] = useState([]);
-  const [variantesInicializadas, setVariantesInicializadas] = useState(false);
-
-
-  useEffect(() => {
-    cargarDatosBase();
-    if (esEdicion) {
-      cargarProducto();
-    }
-  }, [id]);
 
 
 
-  const cargarDatosBase = async () => {
+
+
+
+
+
+
+  const cargarDatosBase = useCallback(async () => {
     try {
       const [catRes, tallasRes, coloresRes] = await Promise.all([
         fetch("http://localhost:4000/categorias"),
@@ -58,59 +56,65 @@ function ProductoForm() {
     } catch (error) {
       console.error("Error al cargar datos base:", error);
     }
-  };
+  }, []);
 
-  const cargarProducto = async () => {
+
+  const cargarProducto = useCallback(async () => {
     try {
-      console.log("🔵 [FRONTEND] Cargando producto con ID:", id);
       const res = await fetch(`http://localhost:4000/productos-admin/${id}`);
       const data = await res.json();
 
-      console.log("🔵 [FRONTEND] Datos recibidos del producto:", {
-        data,
-        tallas: data.tallas,
-        colores: data.colores,
-        tallas_ids_mapped: data.tallas ? data.tallas.map(t => t.id_talla) : [],
-        colores_ids_mapped: data.colores ? data.colores.map(c => c.id_color) : []
+      if (!data) return;
+
+      // Cargar datos base
+      setFormData({
+        nombre: data.nombre || "",
+        descripcion: data.descripcion || "",
+        precio: data.precio || "",
+        estado: data.estado || "Activo",
+        categoria_id: data.categoria_id || "",
+        tallas_ids: data.tallas?.map(t => t.id_talla) || [],
+        colores_ids: data.colores?.map(c => c.id_color) || [],
+        imagen: data.imagen || "",
       });
 
-      if (data) {
-        const formDataNuevo = {
-          nombre: data.nombre || "",
-          descripcion: data.descripcion || "",
-          precio: data.precio || "",
-          estado: data.estado || "Activo",
-          categoria_id: data.categoria_id || "",
-          tallas_ids: data.tallas ? data.tallas.map(t => t.id_talla) : [],
-          colores_ids: data.colores ? data.colores.map(c => c.id_color) : [],
-          imagen: data.imagen || ""
-        };
+      if (data.imagen) setImagenPreview(data.imagen);
 
-        setFormData(formDataNuevo);
+      // ✔ Reconstruir variantes desde inventario REAL
+      const variantesReconstruidas = {};
 
-        if (data.imagen) {
-          setImagenPreview(data.imagen);
-        }
-
-        // 👉 Evita duplicados
-        if (data.colores) {
-          setVariantes(
-            data.colores.map(c => ({
-              color_id: c.id_color,
-              stock: c.stock || 0
-            }))
-          );
-
-
-        }
+      if (data.inventario?.length) {
+        data.inventario.forEach(v => {
+          if (!variantesReconstruidas[v.id_color]) {
+            variantesReconstruidas[v.id_color] = {};
+          }
+          variantesReconstruidas[v.id_color][v.id_talla] = v.stock_actual;
+        });
       }
 
+      setVariantes(variantesReconstruidas);
+
+      console.log("🟩 Variantes cargadas correctamente:", variantesReconstruidas);
 
     } catch (error) {
-      console.error("🔴 [FRONTEND] Error al cargar producto:", error);
+      console.error("Error al cargar producto:", error);
       alert("Error al cargar el producto");
     }
-  };
+  }, [id]);
+
+
+
+
+
+  useEffect(() => {
+    cargarDatosBase(); // 👈 SIEMPRE cargar tallas, colores y categorías
+
+    if (esEdicion) {
+      cargarProducto(); // 👈 Solo cargar datos del producto si estás editando
+    }
+  }, [esEdicion, cargarProducto, cargarDatosBase]);
+
+
 
   const handleChange = (e) => {
     const { name, value } = e.target;
@@ -121,51 +125,185 @@ function ProductoForm() {
   };
 
   const handleTallaToggle = (tallaId) => {
-    console.log("🔵 [FRONTEND] Toggle talla:", tallaId);
     setFormData(prev => {
-      const tallas = prev.tallas_ids || [];
-      const nuevoEstado = tallas.includes(tallaId)
-        ? tallas.filter(id => id !== tallaId)
-        : [...tallas, tallaId];
+      const yaEsta = prev.tallas_ids.includes(tallaId);
 
-      console.log("🔵 [FRONTEND] Nuevas tallas seleccionadas:", nuevoEstado);
-      return {
-        ...prev,
-        tallas_ids: nuevoEstado
-      };
+      if (yaEsta) {
+        // ❌ Quitar talla
+        const nuevasTallas = prev.tallas_ids.filter(id => id !== tallaId);
+
+        setVariantes(v => {
+          const copia = { ...v };
+          Object.keys(copia).forEach(colorId => {
+            delete copia[colorId][tallaId];
+          });
+          return copia;
+        });
+
+        return { ...prev, tallas_ids: nuevasTallas };
+      }
+
+      // ✔ Agregar talla
+      setVariantes(v => {
+        const copia = { ...v };
+        Object.keys(copia).forEach(colorId => {
+          copia[colorId][tallaId] = 0; // stock inicial
+        });
+        return copia;
+      });
+
+      return { ...prev, tallas_ids: [...prev.tallas_ids, tallaId] };
     });
   };
+
+
 
   const handleColorToggle = (colorId) => {
     setFormData(prev => {
-      const yaSeleccionado = prev.colores_ids.includes(colorId);
+      const yaEsta = prev.colores_ids.includes(colorId);
 
-      if (yaSeleccionado) {
-        // 🔻 Si se desmarca → quitar color y variante
-        setVariantes(prevVar => prevVar.filter(v => v.color_id !== colorId));
+      if (yaEsta) {
+        // ❌ Eliminar color
+        const nuevosColores = prev.colores_ids.filter(id => id !== colorId);
 
-        return {
-          ...prev,
-          colores_ids: prev.colores_ids.filter(id => id !== colorId)
-        };
-      } else {
-        // 🔺 Si se marca → agregar color y crear variante en el acto
-        setVariantes(prevVar => {
-          // Para evitar duplicados
-          if (!prevVar.some(v => v.color_id === colorId)) {
-            return [...prevVar, { color_id: colorId, stock: 0 }];
-          }
-          return prevVar;
+        // ❌ También eliminar variantes de ese color
+        setVariantes(v => {
+          const copia = { ...v };
+          delete copia[colorId];
+          return copia;
         });
 
-        return {
-          ...prev,
-          colores_ids: [...prev.colores_ids, colorId]
-        };
+        return { ...prev, colores_ids: nuevosColores };
       }
+
+      // ✔ AGREGAR NUEVO COLOR
+      const nuevosColores = [...prev.colores_ids, colorId];
+
+      // ✔ Crear variantes tallas para ese color automáticamente
+      setVariantes(v => {
+        const copia = { ...v };
+        copia[colorId] = {};
+
+        prev.tallas_ids.forEach(tallaId => {
+          copia[colorId][tallaId] = 0; // stock por defecto
+        });
+
+        return copia;
+      });
+
+      return { ...prev, colores_ids: nuevosColores };
     });
   };
 
+
+
+
+
+
+
+
+
+
+
+
+  const validarFormulario = () => {
+    if (!formData.nombre.trim()) {
+      alert("El nombre es obligatorio");
+      return false;
+    }
+    if (!formData.descripcion.trim()) {
+      alert("La descripción es obligatoria");
+      return false;
+    }
+    if (!formData.precio || parseFloat(formData.precio) <= 0) {
+      alert("El precio debe ser mayor a 0");
+      return false;
+    }
+    if (!formData.categoria_id) {
+      alert("Debe seleccionar una categoría");
+      return false;
+    }
+    return true;
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+
+    if (!validarFormulario()) return;
+
+    setCargando(true);
+
+    try {
+      const url = esEdicion
+        ? `http://localhost:4000/productos-admin/${id}`
+        : "http://localhost:4000/productos-admin";
+
+      const method = esEdicion ? "PUT" : "POST";
+
+      // Normalizar tallas
+      const tallasIds = Array.isArray(formData.tallas_ids)
+        ? formData.tallas_ids.map(id => Number(id))
+        : [];
+
+      // Normalizar colores
+      const coloresIds = Array.isArray(formData.colores_ids)
+        ? formData.colores_ids.map(id => Number(id))
+        : [];
+
+      // Normalizar variantes (asegurar números)
+      const variantesNormalizadas = {};
+      Object.keys(variantes).forEach(colorId => {
+        variantesNormalizadas[colorId] = {};
+        Object.keys(variantes[colorId]).forEach(tallaId => {
+          variantesNormalizadas[colorId][tallaId] =
+            Number(variantes[colorId][tallaId]);
+        });
+      });
+
+      const body = {
+        nombre: formData.nombre.trim(),
+        descripcion: formData.descripcion.trim(),
+        precio: parseFloat(formData.precio),
+        estado: formData.estado,
+        categoria_id: Number(formData.categoria_id),
+
+        // SIEMPRE enviar estos dos
+        tallas_ids: tallasIds,
+        colores_ids: coloresIds,
+
+        imagen: formData.imagen || null,
+
+        // Variantes completas
+        variantes: variantesNormalizadas
+      };
+
+      console.log("🔵 [FRONTEND] Enviando datos:", { method, url, body });
+
+      const res = await fetch(url, {
+        method,
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+      });
+
+      const data = await res.json();
+      console.log("🔵 [FRONTEND] Respuesta:", data);
+
+      if (data.success || res.ok) {
+        alert(esEdicion ? "Producto actualizado correctamente" : "Producto creado correctamente");
+        navigate("/productos-admin");
+      } else {
+        alert(data.message || "Error al guardar");
+      }
+
+    } catch (error) {
+      console.error("🔴 [FRONTEND] Error:", error);
+      alert("Error al guardar");
+    } finally {
+      setCargando(false);
+    }
+  };
 
 
 
@@ -205,105 +343,6 @@ function ProductoForm() {
       alert("Error al subir la imagen");
     } finally {
       setSubiendoImagen(false);
-    }
-  };
-
-  const validarFormulario = () => {
-    if (!formData.nombre.trim()) {
-      alert("El nombre es obligatorio");
-      return false;
-    }
-    if (!formData.descripcion.trim()) {
-      alert("La descripción es obligatoria");
-      return false;
-    }
-    if (!formData.precio || parseFloat(formData.precio) <= 0) {
-      alert("El precio debe ser mayor a 0");
-      return false;
-    }
-    if (!formData.categoria_id) {
-      alert("Debe seleccionar una categoría");
-      return false;
-    }
-    return true;
-  };
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-
-    if (!validarFormulario()) {
-      return;
-    }
-
-    setCargando(true);
-
-    try {
-      const url = esEdicion
-        ? `http://localhost:4000/productos-admin/${id}`
-        : "http://localhost:4000/productos-admin";
-
-      const method = esEdicion ? "PUT" : "POST";
-
-      // Preparar arrays de tallas y colores
-      const tallasIds = Array.isArray(formData.tallas_ids)
-        ? formData.tallas_ids.map(id => parseInt(id)).filter(id => !isNaN(id))
-        : [];
-
-      const coloresIds = Array.isArray(formData.colores_ids)
-        ? formData.colores_ids.map(id => parseInt(id)).filter(id => !isNaN(id))
-        : [];
-
-      const body = {
-        nombre: formData.nombre.trim(),
-        descripcion: formData.descripcion.trim(),
-        precio: parseFloat(formData.precio),
-        estado: formData.estado,
-        categoria_id: parseInt(formData.categoria_id),
-        tallas_ids: tallasIds,
-        colores_ids: coloresIds,
-        imagen: formData.imagen || null,
-        variantes
-      };
-
-      // LOG FRONTEND: Datos que se envían
-      console.log("🔵 [FRONTEND] Enviando datos:", {
-        method,
-        url,
-        body,
-        formDataOriginal: {
-          tallas_ids: formData.tallas_ids,
-          colores_ids: formData.colores_ids
-        }
-      });
-
-      const res = await fetch(url, {
-        method,
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(body)
-      });
-
-      const data = await res.json();
-
-      // LOG FRONTEND: Respuesta del servidor
-      console.log("🔵 [FRONTEND] Respuesta del servidor:", {
-        status: res.status,
-        ok: res.ok,
-        data
-      });
-
-      if (data.success || res.ok) {
-        alert(esEdicion ? "Producto actualizado correctamente" : "Producto creado correctamente");
-        navigate("/productos-admin");
-      } else {
-        alert(data.message || "Error al guardar el producto");
-      }
-    } catch (error) {
-      console.error("🔴 [FRONTEND] Error al guardar:", error);
-      alert("Error al guardar el producto");
-    } finally {
-      setCargando(false);
     }
   };
 
@@ -477,47 +516,84 @@ function ProductoForm() {
               </div>
             </div>
 
-            {variantes.length > 0 && (
+            {formData.colores_ids.length > 0 && (
               <div style={styles.grupo}>
-                <label style={styles.label}>STOCK POR COLOR</label>
+                <label style={styles.label}>STOCK POR COLOR Y TALLA</label>
 
-                {variantes.map((v, index) => {
-                  const colorInfo = colores.find(c => c.id_color === v.color_id);
+                {formData.colores_ids.map((colorId) => {
+                  const colorInfo = colores.find(c => c.id_color === colorId);
 
                   return (
-                    <div key={v.color_id} style={{ marginBottom: "10px" }}>
-                      <strong>{colorInfo?.nombre}</strong>
+                    <div
+                      key={colorId}
+                      style={{
+                        marginBottom: "15px",
+                        padding: "10px",
+                        border: "1px solid #ddd",
+                        borderRadius: "8px"
+                      }}
+                    >
+                      <strong style={{ fontSize: "15px" }}>
+                        {colorInfo?.nombre}
+                      </strong>
 
-                      <div style={{ marginBottom: "10px" }}>
-                        <strong>{colorInfo?.nombre}</strong>
-                        <div style={{ marginBottom: "10px" }}>
-                          <strong>{colorInfo?.nombre}</strong>
+                      {/* Solo tallas seleccionadas */}
+                      {tallas
+                        .filter(t => formData.tallas_ids.includes(t.id_talla))
+                        .map(t => {
+                          const tallaId = t.id_talla;
 
-                          <input
-                            type="number"
-                            value={v.stock}
-                            onChange={(e) => {
-                              const nuevoStock = parseInt(e.target.value) || 0;
+                          const stockActual =
+                            variantes[colorId]?.[tallaId] ?? 0;
 
-                              setVariantes(prev =>
-                                prev.map(item =>
-                                  item.color_id === v.color_id
-                                    ? { ...item, stock: nuevoStock }
-                                    : item
-                                )
-                              );
-                            }}
-                            style={{ marginLeft: "10px", width: "80px" }}
-                          />
-                        </div>
+                          return (
+                            <div
+                              key={tallaId}
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                marginTop: "6px"
+                              }}
+                            >
+                              <span style={{ width: "60px" }}>{t.talla}</span>
 
-                      </div>
+                              <input
+                                type="number"
+                                min="0"
+                                value={stockActual}
+                                onChange={(e) => {
+                                  const newStock = Number(e.target.value);
 
+                                  setVariantes(prev => ({
+                                    ...prev,
+                                    [colorId]: {
+                                      ...(prev[colorId] || {}),   // <--- IMPORTANTE
+                                      [tallaId]: newStock
+                                    }
+                                  }));
+                                }}
+                                style={{
+                                  width: "70px",
+                                  marginLeft: "10px",
+                                  padding: "4px"
+                                }}
+                              />
+                            </div>
+                          );
+                        })}
                     </div>
                   );
                 })}
               </div>
             )}
+
+
+
+
+
+
+
+
 
 
             <div style={styles.grupo}>

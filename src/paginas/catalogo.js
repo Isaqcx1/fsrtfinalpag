@@ -12,18 +12,19 @@ function Catalogo() {
     const [categoriaSeleccionada, setCategoriaSeleccionada] = useState("Polos");
 
     useEffect(() => {
-        fetch("http://localhost:4000/productos")
-            .then(res => res.json())
-            .then(data => {
-                const conImagen = data.map(item => ({
-                    ...item,
-                    imagen: IMAGEN_DEFAULT
-                }));
+    fetch("http://localhost:4000/productos")
+        .then(res => res.json())
+        .then(data => {
+            const conImagen = data.map(item => ({
+                ...item,
+                imagen: item.imagen ? item.imagen : IMAGEN_DEFAULT
+            }));
 
-                setProductos(conImagen);
-            })
-            .catch(err => console.error("Error al cargar productos:", err));
-    }, []);
+            setProductos(conImagen);
+        })
+        .catch(err => console.error("Error al cargar productos:", err));
+}, []);
+
 
 
     const filtrados = productos.filter(p =>

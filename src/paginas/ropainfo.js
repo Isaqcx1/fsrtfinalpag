@@ -32,7 +32,14 @@ function RopaInfo() {
     useEffect(() => {
         fetch(`http://localhost:4000/producto/${id}`)
             .then(res => res.json())
-            .then(data => setProducto(data));
+            .then(data => {
+                setProducto({
+                    ...data,
+                    imagen: data.imagen && data.imagen.trim() !== "" ? data.imagen : "/imgs/ropazz.png"
+                });
+            })
+            .catch(err => console.error("Error al cargar producto:", err));
+
 
         fetch(`http://localhost:4000/producto/${id}/tallas`)
             .then(res => res.json())
@@ -70,7 +77,13 @@ function RopaInfo() {
 
     return (
         <div style={styles.container}>
-            <img src={IMAGEN_DEFAULT} style={styles.img} alt="" />
+            <img
+                src={producto.imagen && producto.imagen.trim() !== "" ? producto.imagen : IMAGEN_DEFAULT}
+                style={styles.img}
+                alt={producto.nombre}
+            />
+
+
 
             <div style={styles.info}>
                 <h2>{producto.nombre}</h2>
@@ -172,6 +185,11 @@ function RopaInfo() {
                             nombre: producto.nombre,
                             precio: producto.precio,
 
+                            imagen:
+                                producto.imagen && producto.imagen.trim() !== ""
+                                    ? producto.imagen
+                                    : "/imgs/ropazz.png",
+
                             id_talla: tallaSel,
                             talla: tallas.find(t => t.id_talla === tallaSel)?.talla,
 
@@ -180,6 +198,7 @@ function RopaInfo() {
 
                             cantidad,
                         });
+
 
 
 

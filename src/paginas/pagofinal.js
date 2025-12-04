@@ -9,7 +9,7 @@ function PagoFinal() {
     const navigate = useNavigate();
 
 
-    
+
     const [form, setForm] = useState({
         email: "",
         nombres: "",
@@ -23,12 +23,12 @@ function PagoFinal() {
 
     const total = cart.reduce((sum, item) => sum + item.precio * item.cantidad, 0);
 
-    
+
     const handleChange = (e) => {
         setForm({ ...form, [e.target.name]: e.target.value });
     };
 
-    
+
     const handleSubmit = async () => {
         if (!form.email || !form.nombres || !form.apellidos || !form.telefono || !form.direccion) {
             alert("Completa todos los campos obligatorios");
@@ -59,14 +59,14 @@ function PagoFinal() {
             });
 
             const data = await res.json();
-            console.log("Respuesta del backend:", data); 
+            console.log("Respuesta del backend:", data);
 
             if (data.success) {
                 navigate("/pagofinal2", {
                     state: {
                         pedidoId: data.pedido_id,
                         total: total,
-                        items: cart 
+                        items: cart
                     }
                 });
 
@@ -85,7 +85,7 @@ function PagoFinal() {
     return (
         <div style={{ display: "flex", padding: "40px", gap: "40px" }}>
 
-            
+
             <div style={{ flex: 2 }}>
                 <h2>Información</h2>
 
@@ -175,7 +175,7 @@ function PagoFinal() {
                     style={{ width: "100%", padding: 10, marginBottom: 20 }}
                 />
 
-                
+
                 <button
                     onClick={handleSubmit}
                     style={{ padding: "12px 20px", fontSize: 16, marginTop: 20 }}
@@ -183,10 +183,10 @@ function PagoFinal() {
                     Continuar a Métodos de Pago
                 </button>
 
-                
+
             </div>
 
-            
+
             <div style={{
                 flex: 1,
                 borderLeft: "1px solid #ccc",
@@ -196,7 +196,17 @@ function PagoFinal() {
 
                 {cart.map((item, index) => (
                     <div key={index} style={{ display: "flex", marginBottom: 20, alignItems: "center" }}>
-                        <img src="https://png.pngtree.com/png-clipart/20230418/original/pngtree-clothing-line-icon-png-image_9065314.png" alt="" width={80} style={{ borderRadius: 5, marginRight: 10 }} />
+                        <img
+                            src={
+                                item.imagen && item.imagen.trim() !== ""
+                                    ? item.imagen
+                                    : "/imgs/ropazz.png"
+                            }
+                            alt={item.nombre}
+                            width={80}
+                            style={{ borderRadius: 5, marginRight: 10 }}
+                        />
+
                         <div>
                             <p><b>{item.nombre}</b></p>
                             <p>S/ {item.precio}</p>
