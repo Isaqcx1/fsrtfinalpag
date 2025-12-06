@@ -35,7 +35,7 @@ function PagoFinal2() {
 
     alert("Pago registrado correctamente");
 
-    navigate("/pedido-finalizado", {
+    navigate("/recibo", {
       state: { pedidoId },
     });
 

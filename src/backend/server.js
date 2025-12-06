@@ -15,13 +15,17 @@ app.use(express.json());
 // Supabase almacena en UTC, así que obtenemos la hora UTC actual
 // Cuando leamos de la BD, convertiremos de UTC a Lima usando AT TIME ZONE 'America/Lima'
 const getLimaNowUTC = () => {
-  const ahora = new Date();
+  // Obtener fecha/hora exacta en Lima SIN manipular manualmente UTC
+  const nowInLima = new Date().toLocaleString("en-CA", {
+    timeZone: "America/Lima",
+    hour12: false
+  });
 
-  // Obtener la hora actual en UTC (getTime() siempre retorna UTC)
-  // toISOString() retorna la fecha en formato ISO 8601 en UTC
-  // Esto es lo que la BD espera recibir
-  return ahora.toISOString();
+  // "2025-12-05 14:30:45" → convertir a formato ISO compatible
+  const [datePart, timePart] = nowInLima.split(", ");
+  return `${datePart}T${timePart}`;
 };
+
 
 // Función para obtener la fecha actual (solo fecha, sin hora) en Lima y convertirla a UTC
 // Retorna el inicio del día actual en UTC (00:00:00 UTC)
@@ -356,12 +360,7 @@ app.post("/pedido-completar", async (req, res) => {
       );
 
 
-      await client.query(
-        `UPDATE Inventario 
-         SET stock_actual = stock_actual - $1
-         WHERE producto_id = $2 AND id_talla = $3 AND id_color = $4`,
-        [cantidad, productoId, tallaId, colorId]
-      );
+      
 
       const fechaActualizacion = getLimaNowUTC();
       await client.query(
@@ -559,7 +558,7 @@ app.get("/productos-admin/:id", async (req, res) => {
     );
     console.log("🟡 [BACKEND] Tallas del producto:", tallasResult.rows);
 
-    
+
     // Obtener colores del producto con stock REAL (sumado por color)
     const coloresResult = await pool.query(
       `SELECT 
@@ -637,7 +636,7 @@ app.post("/productos-admin", async (req, res) => {
 
     await client.query("BEGIN");
 
-    
+
     const productoResult = await client.query(
       `INSERT INTO Productos (nombre, descripcion, precio, estado, categoria_id, imagen)
        VALUES ($1, $2, $3, $4, $5, $6)
@@ -649,7 +648,7 @@ app.post("/productos-admin", async (req, res) => {
 
 
 
-   
+
     if (Array.isArray(tallas_ids)) {
       for (const tallaId of tallas_ids) {
 
@@ -672,7 +671,7 @@ app.post("/productos-admin", async (req, res) => {
 
 
 
-  
+
     if (Array.isArray(colores_ids)) {
       for (const colorId of colores_ids) {
 
@@ -695,9 +694,9 @@ app.post("/productos-admin", async (req, res) => {
 
 
 
-    
+
     if (Array.isArray(tallas_ids) && Array.isArray(colores_ids)) {
-      
+
       const variantes = req.body.variantes || {}; // { colorId: { tallaId: stock } }
 
       for (const colorId of Object.keys(variantes)) {
@@ -726,8 +725,8 @@ app.post("/productos-admin", async (req, res) => {
 
 
 
-    
-    
+
+
     await client.query("COMMIT");
 
     res.json({ success: true, id_producto: productoId });
@@ -801,7 +800,7 @@ app.put("/productos-admin/:id", async (req, res) => {
         ? colores.map(Number)
         : [];
 
-    
+
     const tallasExist = (
       await client.query(`SELECT id_talla FROM Producto_Tallas WHERE id_producto=$1`, [id])
     ).rows.map(r => Number(r.id_talla));
@@ -829,7 +828,7 @@ app.put("/productos-admin/:id", async (req, res) => {
       );
     }
 
-   
+
     const coloresExist = (
       await client.query(`SELECT id_color FROM Producto_Colores WHERE id_producto=$1`, [id])
     ).rows.map(r => Number(r.id_color));
@@ -857,7 +856,7 @@ app.put("/productos-admin/:id", async (req, res) => {
       );
     }
 
-    
+
     const tallasFinales = (
       await client.query(`SELECT id_talla FROM Producto_Tallas WHERE id_producto=$1`, [id])
     ).rows.map(r => Number(r.id_talla));
@@ -884,8 +883,8 @@ app.put("/productos-admin/:id", async (req, res) => {
       }
     }
 
-  
-    const { variantes } = req.body;  
+
+    const { variantes } = req.body;
 
     if (variantes && typeof variantes === "object") {
       for (const colorId of Object.keys(variantes)) {
@@ -1152,72 +1151,93 @@ app.get("/dashboard/ventas", async (req, res) => {
   try {
     const { periodo } = req.query || 'mes'; // 'dia', 'mes', 'año'
 
-    let fechaInicio;
-    const fechaFin = new Date();
+    // ---------------- ZONA HORARIA LIMA ----------------
+    const ahoraLima = new Date(
+      new Date().toLocaleString("en-US", { timeZone: "America/Lima" })
+    );
+
+    let fechaInicio = new Date(ahoraLima);
+    let fechaFin = new Date(ahoraLima);
     fechaFin.setHours(23, 59, 59, 999);
 
     switch (periodo) {
       case 'dia':
-        fechaInicio = new Date();
-        fechaInicio.setDate(fechaInicio.getDate() - 1);
         fechaInicio.setHours(0, 0, 0, 0);
         break;
+
       case 'mes':
-        fechaInicio = new Date();
         fechaInicio.setMonth(fechaInicio.getMonth() - 1);
         fechaInicio.setHours(0, 0, 0, 0);
         break;
+
       case 'año':
-        fechaInicio = new Date();
         fechaInicio.setFullYear(fechaInicio.getFullYear() - 1);
         fechaInicio.setHours(0, 0, 0, 0);
         break;
+
       default:
-        fechaInicio = new Date();
         fechaInicio.setMonth(fechaInicio.getMonth() - 1);
         fechaInicio.setHours(0, 0, 0, 0);
     }
 
-    console.log("🔵 [DASHBOARD] Consultando ventas:", { periodo, fechaInicio, fechaFin });
+    console.log("🔵 [DASHBOARD] LIMA:", { periodo, fechaInicio, fechaFin });
 
-    // Ventas totales del período - usar total del pedido en lugar de monto del pago
+    // ---------------- VENTAS DEL PERIODO ACTUAL ----------------
     const ventasResult = await pool.query(
       `SELECT COALESCE(SUM(ped.total), 0) as total_ventas
        FROM Pedidos ped
        WHERE ped.estado = 'Pagado'
-       AND ped.fecha_pedido >= $1 AND ped.fecha_pedido <= $2`,
+       AND ped.fecha_pedido BETWEEN $1 AND $2`,
       [fechaInicio, fechaFin]
     );
 
     const ventasTotales = parseFloat(ventasResult.rows[0].total_ventas || 0);
-    console.log("🔵 [DASHBOARD] Ventas totales encontradas:", ventasTotales);
 
-    // Ventas del mes anterior para calcular tasa de crecimiento
-    const mesAnteriorInicio = new Date(fechaInicio);
-    mesAnteriorInicio.setMonth(mesAnteriorInicio.getMonth() - 1);
-    const mesAnteriorFin = new Date(fechaInicio);
-    mesAnteriorFin.setHours(0, 0, 0, 0);
+    // ---------------- PERIODO ANTERIOR ----------------
+    let inicioPeriodoAnterior = new Date(fechaInicio);
+    let finPeriodoAnterior = new Date(fechaInicio);
 
-    const ventasMesAnteriorResult = await pool.query(
+    if (periodo === 'dia') {
+      inicioPeriodoAnterior.setDate(inicioPeriodoAnterior.getDate() - 1);
+      inicioPeriodoAnterior.setHours(0, 0, 0, 0);
+
+      finPeriodoAnterior = new Date(inicioPeriodoAnterior);
+      finPeriodoAnterior.setHours(23, 59, 59, 999);
+
+    } else if (periodo === 'mes') {
+      inicioPeriodoAnterior.setMonth(inicioPeriodoAnterior.getMonth() - 1);
+      inicioPeriodoAnterior.setHours(0, 0, 0, 0);
+
+      finPeriodoAnterior = new Date(inicioPeriodoAnterior);
+      finPeriodoAnterior.setMonth(finPeriodoAnterior.getMonth() + 1);
+
+    } else if (periodo === 'año') {
+      inicioPeriodoAnterior.setFullYear(inicioPeriodoAnterior.getFullYear() - 1);
+      inicioPeriodoAnterior.setMonth(0, 0);
+      inicioPeriodoAnterior.setHours(0, 0, 0, 0);
+
+      finPeriodoAnterior = new Date(inicioPeriodoAnterior);
+      finPeriodoAnterior.setFullYear(finPeriodoAnterior.getFullYear() + 1);
+    }
+
+    const ventasPeriodoAnteriorResult = await pool.query(
       `SELECT COALESCE(SUM(ped.total), 0) as total_ventas
        FROM Pedidos ped
        WHERE ped.estado = 'Pagado'
-       AND ped.fecha_pedido >= $1 AND ped.fecha_pedido < $2`,
-      [mesAnteriorInicio, mesAnteriorFin]
+       AND ped.fecha_pedido BETWEEN $1 AND $2`,
+      [inicioPeriodoAnterior, finPeriodoAnterior]
     );
 
-    const ventasMesAnterior = parseFloat(ventasMesAnteriorResult.rows[0].total_ventas || 0);
-    console.log("🔵 [DASHBOARD] Ventas mes anterior:", ventasMesAnterior);
+    const ventasMesAnterior = parseFloat(ventasPeriodoAnteriorResult.rows[0].total_ventas || 0);
 
-    // Calcular tasa de crecimiento
     let tasaCrecimiento = 0;
     if (ventasMesAnterior > 0) {
       tasaCrecimiento = ((ventasTotales - ventasMesAnterior) / ventasMesAnterior) * 100;
     } else if (ventasTotales > 0) {
-      tasaCrecimiento = 100; // Crecimiento del 100% si no había ventas antes
+      tasaCrecimiento = 100;
     }
 
-    // Categorías más vendidas (top 5)
+    // ---------------- CATEGORÍAS ----------------
     const categoriasResult = await pool.query(
       `SELECT 
         c.nombre as categoria,
@@ -1229,40 +1249,27 @@ app.get("/dashboard/ventas", async (req, res) => {
        JOIN Categorias c ON pr.categoria_id = c.id_categoria
        JOIN Pedidos ped ON dp.pedido_id = ped.id_pedido
        WHERE ped.estado = 'Pagado'
-       AND ped.fecha_pedido >= $1 AND ped.fecha_pedido <= $2
+       AND ped.fecha_pedido BETWEEN $1 AND $2
        GROUP BY c.id_categoria, c.nombre
        ORDER BY total_vendido DESC
        LIMIT 5`,
       [fechaInicio, fechaFin]
     );
-    console.log("🔵 [DASHBOARD] Categorías encontradas:", categoriasResult.rows.length);
 
-    // Obtener parámetros para comparar
+    // ---------------- PARAMETRIZACIONES ----------------
     const parametrosResult = await pool.query(
       `SELECT codigo, valor FROM Parametrizaciones 
        WHERE codigo IN ('MINIMO_VENTAS_MENSUAL', 'TASA_CRECIMIENTO_MENSUAL')`
     );
-
-    console.log("🔵 [DASHBOARD] Parámetros encontrados:", parametrosResult.rows);
 
     const parametros = {};
     parametrosResult.rows.forEach(p => {
       parametros[p.codigo] = parseFloat(p.valor);
     });
 
-    console.log("🔵 [DASHBOARD] Parámetros procesados:", parametros);
-
-    // Calcular equivalente diario/semanal del mínimo mensual según el período
     let minimoEsperado = parametros.MINIMO_VENTAS_MENSUAL || 5000;
-    if (periodo === 'dia') {
-      minimoEsperado = minimoEsperado / 30; // Aproximadamente diario
-    } else if (periodo === 'mes') {
-      minimoEsperado = minimoEsperado; // Mensual
-    } else if (periodo === 'año') {
-      minimoEsperado = minimoEsperado * 12; // Anual
-    }
-
-    console.log("🔵 [DASHBOARD] Mínimo esperado calculado:", minimoEsperado);
+    if (periodo === 'dia') minimoEsperado /= 30;
+    if (periodo === 'año') minimoEsperado *= 12;
 
     res.json({
       ventas_totales: ventasTotales,
@@ -1272,8 +1279,9 @@ app.get("/dashboard/ventas", async (req, res) => {
         minimo_ventas: minimoEsperado,
         tasa_crecimiento_minima: parametros.TASA_CRECIMIENTO_MENSUAL || 10
       },
-      periodo: periodo || 'mes'
+      periodo
     });
+
   } catch (error) {
     console.error("Error al obtener estadísticas de ventas:", error);
     res.status(500).json({ message: "Error al obtener estadísticas" });
@@ -1281,66 +1289,82 @@ app.get("/dashboard/ventas", async (req, res) => {
 });
 
 
-// Obtener ventas recientes (del día) con paginación
+
 app.get("/dashboard/ventas-recientes", async (req, res) => {
   try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = 10;
-    const offset = (page - 1) * limit;
+    const periodo = req.query.periodo || "dia";
 
-    const fechaHoy = new Date();
-    fechaHoy.setHours(0, 0, 0, 0);
-    const fechaManana = new Date(fechaHoy);
-    fechaManana.setDate(fechaManana.getDate() + 1);
-
-    console.log("🔵 [VENTAS-RECIENTES] Consultando ventas del día:", { fechaHoy, fechaManana });
-
-    // Contar total
-    const countResult = await pool.query(
-      `SELECT COUNT(DISTINCT p.id_pedido) as total
-       FROM Pedidos p
-       WHERE p.estado = 'Pagado'
-       AND p.fecha_pedido >= $1 AND p.fecha_pedido < $2`,
-      [fechaHoy, fechaManana]
+    // ------------------------- LIMA TIME -------------------------
+    const ahoraLima = new Date(
+      new Date().toLocaleString("en-US", { timeZone: "America/Lima" })
     );
 
-    const total = parseInt(countResult.rows[0].total || 0);
-    console.log("🔵 [VENTAS-RECIENTES] Total de ventas encontradas:", total);
+    let fechaInicioLima;
+    let fechaFinLima;
 
-    // Obtener ventas
+    switch (periodo) {
+      case "dia":
+        fechaInicioLima = new Date(ahoraLima);
+        fechaInicioLima.setHours(0, 0, 0, 0);
+        fechaFinLima = new Date(fechaInicioLima);
+        fechaFinLima.setDate(fechaFinLima.getDate() + 1);
+        break;
+
+      case "mes":
+        fechaInicioLima = new Date(ahoraLima.getFullYear(), ahoraLima.getMonth(), 1);
+        fechaFinLima = new Date(ahoraLima.getFullYear(), ahoraLima.getMonth() + 1, 1);
+        break;
+
+      case "año":
+        fechaInicioLima = new Date(ahoraLima.getFullYear(), 0, 1);
+        fechaFinLima = new Date(ahoraLima.getFullYear() + 1, 0, 1);
+        break;
+
+      default:
+        return res.status(400).json({ message: "Periodo inválido" });
+    }
+
+    // Convertir fechas a UTC
+    const fechaInicioUTC = fechaInicioLima.toISOString();
+    const fechaFinUTC = fechaFinLima.toISOString();
+
+    console.log("🟦 PERIODO:", periodo, fechaInicioUTC, fechaFinUTC);
+
+    // ------------------------- QUERY SIN PAGINACIÓN -------------------------
     const ventasResult = await pool.query(
       `SELECT 
-        p.id_pedido,
-        p.fecha_pedido,
-        p.total as monto,
-        p.cliente_nombre,
-        COALESCE(pag.metodo_pago, 'N/A') as metodo_pago,
-        pag.fecha_pago
+         p.id_pedido,
+         p.fecha_pedido 
+           AT TIME ZONE 'UTC' 
+           AT TIME ZONE 'America/Lima' AS fecha_pedido,
+         p.total AS monto,
+         p.cliente_nombre,
+         COALESCE(pag.metodo_pago, 'N/A') AS metodo_pago,
+         pag.fecha_pago 
+           AT TIME ZONE 'UTC' 
+           AT TIME ZONE 'America/Lima' AS fecha_pago
        FROM Pedidos p
        LEFT JOIN Pagos pag ON p.id_pedido = pag.pedido_id
        WHERE p.estado = 'Pagado'
-       AND p.fecha_pedido >= $1 AND p.fecha_pedido < $2
-       ORDER BY p.fecha_pedido DESC
-       LIMIT $3 OFFSET $4`,
-      [fechaHoy, fechaManana, limit, offset]
+       AND p.fecha_pedido >= $1
+       AND p.fecha_pedido < $2
+       ORDER BY p.fecha_pedido DESC`,
+      [fechaInicioUTC, fechaFinUTC]
     );
 
-    console.log("🔵 [VENTAS-RECIENTES] Ventas obtenidas:", ventasResult.rows.length);
-
+    // DEVOLVER SOLO VENTAS
     res.json({
-      ventas: ventasResult.rows,
-      paginacion: {
-        pagina_actual: page,
-        total_paginas: Math.ceil(total / limit),
-        total_ventas: total,
-        ventas_por_pagina: limit
-      }
+      ventas: ventasResult.rows
     });
+
   } catch (error) {
     console.error("Error al obtener ventas recientes:", error);
     res.status(500).json({ message: "Error al obtener ventas recientes" });
   }
 });
+
+
+
 
 // Obtener detalle de una venta
 app.get("/dashboard/venta/:id", async (req, res) => {
@@ -1392,6 +1416,119 @@ app.get("/dashboard/venta/:id", async (req, res) => {
   }
 });
 
+
+
+
+// --- RUTA: serie de ventas para graficar ---
+app.get("/dashboard/ventas-series", async (req, res) => {
+  try {
+    const periodo = (req.query.periodo || "mes").toLowerCase(); // 'dia'|'mes'|'año'
+    const fechaFin = new Date();
+    fechaFin.setHours(23, 59, 59, 999);
+
+    let fechaInicio;
+    let groupBy; // SQL date_trunc arg
+    if (periodo === "dia") {
+      fechaInicio = new Date();
+      fechaInicio.setDate(fechaInicio.getDate() - 1);
+      fechaInicio.setHours(0, 0, 0, 0);
+      groupBy = "hour";
+    } else if (periodo === "año" || periodo === "anio") {
+      fechaInicio = new Date();
+      fechaInicio.setFullYear(fechaInicio.getFullYear() - 1);
+      fechaInicio.setHours(0, 0, 0, 0);
+      groupBy = "month";
+    } else { // mes por defecto
+      fechaInicio = new Date();
+      fechaInicio.setMonth(fechaInicio.getMonth() - 1);
+      fechaInicio.setHours(0, 0, 0, 0);
+      groupBy = "day";
+    }
+
+    // Postgres: agrupamos con date_trunc
+    const q = `
+      SELECT date_trunc($3, p.fecha_pedido) as periodo, COALESCE(SUM(p.total), 0) as total
+      FROM Pedidos p
+      WHERE p.estado = 'Pagado'
+        AND p.fecha_pedido >= $1
+        AND p.fecha_pedido <= $2
+      GROUP BY periodo
+      ORDER BY periodo
+    `;
+
+    const result = await pool.query(q, [fechaInicio, fechaFin, groupBy]);
+    // Transformar periodo a string legible en frontend
+    const rows = result.rows.map(r => ({
+      periodo: r.periodo ? r.periodo.toISOString() : null,
+      total: parseFloat(r.total || 0)
+    }));
+
+    res.json(rows);
+  } catch (err) {
+    console.error("Error /dashboard/ventas-series:", err);
+    res.status(500).json({ message: "Error obteniendo serie de ventas" });
+  }
+});
+
+// --- RUTA: productos más vendidos (top N) ---
+app.get("/dashboard/productos-mas-vendidos", async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 8;
+    const { periodo } = req.query || 'mes';
+
+    // Rango de fechas CORRECTO
+    let fechaInicio;
+    const fechaFin = new Date();
+    fechaFin.setHours(23, 59, 59, 999);
+
+    switch (periodo) {
+      case "dia":
+        fechaInicio = new Date();
+        fechaInicio.setHours(0, 0, 0, 0);  // HOY, no ayer
+        break;
+
+      case "año":
+      case "anio":
+        fechaInicio = new Date();
+        fechaInicio.setFullYear(fechaInicio.getFullYear() - 1);
+        fechaInicio.setHours(0, 0, 0, 0);
+        break;
+
+      case "mes":
+      default:
+        fechaInicio = new Date();
+        fechaInicio.setMonth(fechaInicio.getMonth() - 1);
+        fechaInicio.setHours(0, 0, 0, 0);
+    }
+
+    const q = `
+      SELECT pr.id_producto, pr.nombre as producto, COALESCE(SUM(dp.cantidad),0) as unidades_vendidas
+      FROM Detalle_Pedido dp
+      JOIN Pedidos p ON dp.pedido_id = p.id_pedido
+      JOIN Productos pr ON dp.producto_id = pr.id_producto
+      WHERE p.estado = 'Pagado'
+        AND p.fecha_pedido >= $1 AND p.fecha_pedido <= $2
+      GROUP BY pr.id_producto, pr.nombre
+      ORDER BY unidades_vendidas DESC
+      LIMIT $3
+    `;
+
+    const result = await pool.query(q, [fechaInicio, fechaFin, limit]);
+
+    res.json(
+      result.rows.map(r => ({
+        producto: r.producto,
+        unidades: parseInt(r.unidades_vendidas)
+      }))
+    );
+
+  } catch (err) {
+    console.error("Error /dashboard/productos-mas-vendidos:", err);
+    res.status(500).json({ message: "Error obteniendo productos más vendidos" });
+  }
+});
+
+
 // ========== ENDPOINTS PARA PARAMETRIZACIONES ==========
 
 // Obtener todas las parametrizaciones
@@ -1437,113 +1574,6 @@ app.put("/parametrizaciones/:id", async (req, res) => {
   }
 });
 
-// ========== ENDPOINTS PARA PROMOCIONES ==========
-
-// Obtener promociones con paginación
-app.get("/promociones", async (req, res) => {
-  try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = 10;
-    const offset = (page - 1) * limit;
-    const soloActivas = req.query.activas === 'true';
-
-    let query = `
-      SELECT 
-        pr.*,
-        c.nombre as categoria_nombre
-      FROM Promociones pr
-      JOIN Categorias c ON pr.categoria_id = c.id_categoria
-    `;
-
-    const params = [];
-    if (soloActivas) {
-      const fechaHoy = getLimaTodayUTC();
-      query += ` WHERE pr.activa = TRUE AND pr.fecha_fin >= $1::date`;
-      params.push(fechaHoy);
-    }
-
-    // Contar total
-    const countQuery = query.replace(/SELECT.*FROM/, 'SELECT COUNT(*) as total FROM');
-    const countResult = await pool.query(countQuery, params);
-    const total = parseInt(countResult.rows[0].total);
-
-    query += ` ORDER BY pr.fecha_creacion DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
-    params.push(limit, offset);
-
-    const result = await pool.query(query, params);
-
-    res.json({
-      promociones: result.rows,
-      paginacion: {
-        pagina_actual: page,
-        total_paginas: Math.ceil(total / limit),
-        total_promociones: total,
-        promociones_por_pagina: limit
-      }
-    });
-  } catch (error) {
-    console.error("Error al obtener promociones:", error);
-    res.status(500).json({ message: "Error al obtener promociones" });
-  }
-});
-
-// Crear nueva promoción
-app.post("/promociones", async (req, res) => {
-  try {
-    console.log("🔵 [PROMOCIONES] POST recibido:", req.body);
-    const { categoria_id, porcentaje_descuento, fecha_inicio, fecha_fin } = req.body;
-
-    if (!categoria_id || porcentaje_descuento === undefined || porcentaje_descuento === null || !fecha_inicio || !fecha_fin) {
-      console.log("🔴 [PROMOCIONES] Faltan campos obligatorios");
-      return res.status(400).json({ message: "Faltan campos obligatorios" });
-    }
-
-    const porcentaje = parseFloat(porcentaje_descuento);
-    if (isNaN(porcentaje) || porcentaje < 0 || porcentaje > 100) {
-      console.log("🔴 [PROMOCIONES] Porcentaje inválido:", porcentaje);
-      return res.status(400).json({ message: "El porcentaje de descuento debe estar entre 0 y 100" });
-    }
-
-    if (new Date(fecha_fin) < new Date(fecha_inicio)) {
-      console.log("🔴 [PROMOCIONES] Fechas inválidas");
-      return res.status(400).json({ message: "La fecha de fin debe ser posterior a la fecha de inicio" });
-    }
-
-    const result = await pool.query(
-      `INSERT INTO Promociones (categoria_id, porcentaje_descuento, fecha_inicio, fecha_fin)
-       VALUES ($1, $2, $3, $4)
-       RETURNING *`,
-      [parseInt(categoria_id), porcentaje, fecha_inicio, fecha_fin]
-    );
-
-    console.log("✅ [PROMOCIONES] Promoción creada:", result.rows[0]);
-    res.json({ success: true, promocion: result.rows[0] });
-  } catch (error) {
-    console.error("🔴 [PROMOCIONES] Error al crear promoción:", error);
-    res.status(500).json({ message: "Error al crear promoción: " + error.message });
-  }
-});
-
-// Eliminar promoción
-app.delete("/promociones/:id", async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    const result = await pool.query(
-      `DELETE FROM Promociones WHERE id_promocion = $1 RETURNING *`,
-      [id]
-    );
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ message: "Promoción no encontrada" });
-    }
-
-    res.json({ success: true });
-  } catch (error) {
-    console.error("Error al eliminar promoción:", error);
-    res.status(500).json({ message: "Error al eliminar promoción" });
-  }
-});
 
 
 

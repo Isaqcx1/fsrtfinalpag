@@ -13,6 +13,8 @@ import ProductoForm from "./paginas/producto-form.js";
 import Dashboard from "./paginas/dashboard.js";
 import DetalleVenta from "./paginas/detalle-venta.js";
 import Verificacion from "./paginas/verificacion.js";
+import Recibo from "./paginas/recibo.js";
+import Info from "./paginas/info.js";
 
 function AppContent() {
   const location = useLocation();
@@ -36,12 +38,14 @@ function AppContent() {
         <Route path="/checkout" element={<PagoFinal />} />
         <Route path="/login" element={<Login />} />
         <Route path="/pagofinal2" element={<PagoFinal2 />} />
+        <Route path="/recibo" element={<Recibo />} />
         <Route path="/productos-admin" element={<ProductosAdmin />} />
         <Route path="/productos-admin/nuevo" element={<ProductoForm />} />
         <Route path="/productos-admin/editar/:id" element={<ProductoForm />} />
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/dashboard/venta/:id" element={<DetalleVenta />} />
         <Route path="/verificacion" element={<Verificacion />} />
+        <Route path="/info" element={<Info />} />
       </Routes>
     </>
   );

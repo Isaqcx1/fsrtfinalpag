@@ -1,80 +1,92 @@
 import React, { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
-
+import { useNavigate, useLocation } from "react-router-dom";
 
 const IMAGEN_DEFAULT = "/imgs/ropazz.png";
-
 
 const CATEGORIAS = ["Polos", "Pantalones", "Casacas", "Shorts"];
 
 function Catalogo() {
-    const [productos, setProductos] = useState([]);
-    const [categoriaSeleccionada, setCategoriaSeleccionada] = useState("Polos");
+  const [productos, setProductos] = useState([]);
+  const location = useLocation();
 
-    useEffect(() => {
+  
+  const queryParams = new URLSearchParams(location.search);
+  const catURL = queryParams.get("cat");
+
+ 
+  const [categoriaSeleccionada, setCategoriaSeleccionada] = useState(
+    catURL || "Polos"
+  );
+
+  useEffect(() => {
     fetch("http://localhost:4000/productos")
-        .then(res => res.json())
-        .then(data => {
-            const conImagen = data.map(item => ({
-                ...item,
-                imagen: item.imagen ? item.imagen : IMAGEN_DEFAULT
-            }));
+      .then((res) => res.json())
+      .then((data) => {
+        const conImagen = data.map((item) => ({
+          ...item,
+          imagen: item.imagen ? item.imagen : IMAGEN_DEFAULT,
+        }));
 
-            setProductos(conImagen);
-        })
-        .catch(err => console.error("Error al cargar productos:", err));
-}, []);
+        setProductos(conImagen);
+      })
+      .catch((err) => console.error("Error al cargar productos:", err));
+  }, []);
 
+  
+  useEffect(() => {
+    if (catURL) setCategoriaSeleccionada(catURL);
+  }, [catURL]);
 
+  const filtrados = productos.filter(
+    (p) =>
+      p.categoria?.toLowerCase() === categoriaSeleccionada.toLowerCase()
+  );
 
-    const filtrados = productos.filter(p =>
-        p.categoria?.toLowerCase() === categoriaSeleccionada.toLowerCase()
-    );
-    const navigate = useNavigate();
-    return (
-        <div>
+  const navigate = useNavigate();
 
-            <div style={styles.categoriasBar}>
-                {CATEGORIAS.map(cat => (
-                    <button
-                        key={cat}
-                        style={{
-                            ...styles.catBtn,
-                            ...(categoriaSeleccionada === cat ? styles.catBtnActivo : {})
-                        }}
-                        onClick={() => setCategoriaSeleccionada(cat)}
-                    >
-                        {cat}
-                    </button>
-                ))}
-            </div>
+  return (
+    <div>
+      {/* BARRA DE CATEGORÍAS */}
+      <div style={styles.categoriasBar}>
+        {CATEGORIAS.map((cat) => (
+          <button
+            key={cat}
+            style={{
+              ...styles.catBtn,
+              ...(categoriaSeleccionada === cat ? styles.catBtnActivo : {}),
+            }}
+            onClick={() => {
+              setCategoriaSeleccionada(cat);
+              navigate(`/catalogo?cat=${encodeURIComponent(cat)}`);
+            }}
+          >
+            {cat}
+          </button>
+        ))}
+      </div>
 
+      {/* PRODUCTOS */}
+      <div style={styles.container}>
+        {filtrados.length === 0 && (
+          <p style={{ textAlign: "center", width: "100%" }}>
+            No hay productos en esta categoría.
+          </p>
+        )}
 
-            <div style={styles.container}>
-                {filtrados.length === 0 && (
-                    <p style={{ textAlign: "center", width: "100%" }}>
-                        No hay productos en esta categoría.
-                    </p>
-                )}
+        {filtrados.map((p) => (
+          <div key={p.id_producto} style={styles.card}>
+            <img src={p.imagen} style={styles.img} alt="" />
+            <h3 style={styles.nombre}>{p.nombre}</h3>
+            <p style={styles.precio}>S/ {p.precio}</p>
 
-                {filtrados.map((p) => (
-                    <div key={p.id_producto} style={styles.card}>
-                        <img src={p.imagen} style={styles.img} alt="" />
-                        <h3 style={styles.nombre}>{p.nombre}</h3>
-                        <p style={styles.precio}>S/ {p.precio}</p>
-
-                        <button onClick={() => navigate(`/ropainfo/${p.id_producto}`)}>
-
-                            Agregar
-                        </button>
-
-
-
-                    </div>
-                ))}
-            </div>
-        </div>
-    );
+            <button onClick={() => navigate(`/ropainfo/${p.id_producto}`)}>
+              Agregar
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 
@@ -91,7 +103,7 @@ const styles = {
     catBtn: {
         background: "transparent",
         border: "none",
-        fontSize: "18px",
+        fontSize: "25px",
         cursor: "pointer",
         padding: "8px 15px",
         color: "#444"
@@ -104,7 +116,7 @@ const styles = {
     container: {
         display: "grid",
         gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))",
-        gap: "20px",
+        gap: "40px",
         padding: "20px"
     },
     card: {
@@ -116,7 +128,7 @@ const styles = {
     },
     img: {
         width: "100%",
-        height: "220px",
+        height: "300px",
         objectFit: "cover"
     },
     nombre: {

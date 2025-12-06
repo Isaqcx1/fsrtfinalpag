@@ -1,4 +1,17 @@
-import React, { useEffect, useState, useCallback } from "react";
+import {
+    ResponsiveContainer,
+    XAxis,
+    YAxis,
+    Tooltip,
+    CartesianGrid,
+    BarChart,
+    Bar,
+    PieChart,
+    Pie,
+    Cell,
+    Legend
+} from "recharts";
+import { useEffect, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 
 // Estilos de impresión para PDF
@@ -26,199 +39,228 @@ const printStyles = `
 `;
 
 if (typeof document !== "undefined") {
-  const styleSheet = document.createElement("style");
-  styleSheet.type = "text/css";
-  styleSheet.innerText = printStyles;
-  document.head.appendChild(styleSheet);
+    const styleSheet = document.createElement("style");
+    styleSheet.type = "text/css";
+    styleSheet.innerText = printStyles;
+    document.head.appendChild(styleSheet);
 }
 
 function Dashboard() {
-  const navigate = useNavigate();
+    const navigate = useNavigate();
 
-  // Estados
-  const [periodo, setPeriodo] = useState("mes");
-  const [estadisticas, setEstadisticas] = useState(null);
-  const [ventasRecientes, setVentasRecientes] = useState([]);
-  const [paginaVentas, setPaginaVentas] = useState(1);
-  const [paginacionVentas, setPaginacionVentas] = useState({});
-  const [parametrizaciones, setParametrizaciones] = useState([]);
-  const [promociones, setPromociones] = useState([]);
-  const [paginaPromociones, setPaginaPromociones] = useState(1);
-  const [paginacionPromociones, setPaginacionPromociones] = useState({});
-  const [mostrarFormPromocion, setMostrarFormPromocion] = useState(false);
-  const [formPromocion, setFormPromocion] = useState({
-    categoria_id: "",
-    porcentaje_descuento: "",
-    fecha_inicio: "",
-    fecha_fin: ""
-  });
-  const [categorias, setCategorias] = useState([]);
-  const [cargando, setCargando] = useState(true);
+    const [periodo, setPeriodo] = useState("mes");
+    const [estadisticas, setEstadisticas] = useState(null);
+    const [ventasRecientes, setVentasRecientes] = useState([]);
+    const [paginaVentas, setPaginaVentas] = useState(1);
+    const [paginacionVentas, setPaginacionVentas] = useState({});
+    const [parametrizaciones, setParametrizaciones] = useState([]);
 
-  // Funciones de carga
-  const cargarEstadisticas = useCallback(async () => {
-    try {
-      const res = await fetch(`http://localhost:4000/dashboard/ventas?periodo=${periodo}`);
-      const data = await res.json();
-      setEstadisticas(data);
-    } catch (error) {
-      console.error("Error al cargar estadísticas:", error);
-    }
-  }, [periodo]);
+    const [categorias, setCategorias] = useState([]);
+    const [cargando, setCargando] = useState(true);
 
-  const cargarVentasRecientes = useCallback(async () => {
-    try {
-      const res = await fetch(`http://localhost:4000/dashboard/ventas-recientes?page=${paginaVentas}`);
-      const data = await res.json();
-      setVentasRecientes(data.ventas || []);
-      setPaginacionVentas(data.paginacion || {});
-    } catch (error) {
-      console.error("Error al cargar ventas recientes:", error);
-    }
-  }, [paginaVentas]);
+    const [productosMasVendidos, setProductosMasVendidos] = useState([]);
 
-  const cargarParametrizaciones = useCallback(async () => {
-    try {
-      const res = await fetch("http://localhost:4000/parametrizaciones");
-      const data = await res.json();
-      setParametrizaciones(data);
-    } catch (error) {
-      console.error("Error al cargar parametrizaciones:", error);
-    }
-  }, []);
+    const [cargandoSeries, setCargandoSeries] = useState(false);
+    const [serieVentas, setSerieVentas] = useState([]);
 
-  const cargarPromociones = useCallback(async () => {
-    try {
-      const res = await fetch(`http://localhost:4000/promociones?activas=true&page=${paginaPromociones}`);
-      const data = await res.json();
-      setPromociones(data.promociones || []);
-      setPaginacionPromociones(data.paginacion || {});
-    } catch (error) {
-      console.error("Error al cargar promociones:", error);
-    }
-  }, [paginaPromociones]);
 
-  const cargarCategorias = useCallback(async () => {
-    try {
-      const res = await fetch("http://localhost:4000/categorias");
-      const data = await res.json();
-      setCategorias(data);
-    } catch (error) {
-      console.error("Error al cargar categorías:", error);
-    }
-  }, []);
+    // ------------------ Cargar estadísticas ------------------
+    const cargarEstadisticas = useCallback(async () => {
+        try {
+            const res = await fetch(`http://localhost:4000/dashboard/ventas?periodo=${periodo}`);
+            const data = await res.json();
+            setEstadisticas(data);
+        } catch (error) {
+            console.error("Error al cargar estadísticas:", error);
+        }
+    }, [periodo]);
 
-  // useEffect de carga inicial
-  useEffect(() => {
-    const cargar = async () => {
-      await Promise.all([
-        cargarEstadisticas(),
-        cargarVentasRecientes(),
-        cargarParametrizaciones(),
-        cargarPromociones(),
-        cargarCategorias()
-      ]);
-      setCargando(false);
-    };
-    cargar();
-  }, [cargarEstadisticas, cargarVentasRecientes, cargarParametrizaciones, cargarPromociones, cargarCategorias]);
+    // ------------------ 🔥 ARREGLO AQUÍ 🔥 ------------------
+    const cargarVentasRecientes = useCallback(async () => {
+        try {
+            const res = await fetch(
+                `http://localhost:4000/dashboard/ventas-recientes?periodo=${periodo}&page=${paginaVentas}`
+            );
 
-  // Funciones de acciones
-  const handleActualizarParametro = async (id, nuevoValor) => {
-    try {
-      const res = await fetch(`http://localhost:4000/parametrizaciones/${id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ valor: parseFloat(nuevoValor) })
-      });
-      const data = await res.json();
-      if (data.success) {
-        alert("Parámetro actualizado correctamente");
-        cargarParametrizaciones();
+            const data = await res.json();
+
+            // 🟩 Normalización correcta de fecha/hora
+            const lista = (data.ventas || []).map(v => ({
+                ...v,
+                fecha_formateada: new Date(v.fecha_pedido).toLocaleDateString("es-PE"),
+                hora_formateada: new Date(v.fecha_pedido).toLocaleTimeString("es-PE", {
+                    hour: "2-digit",
+                    minute: "2-digit"
+                })
+            }));
+
+            setVentasRecientes(lista);
+            setPaginacionVentas(data.paginacion || {});
+
+        } catch (error) {
+            console.error("Error al cargar ventas recientes:", error);
+        }
+    }, [paginaVentas, periodo]);
+    // ---------------------------------------------------------
+
+
+    const cargarParametrizaciones = useCallback(async () => {
+        try {
+            const res = await fetch("http://localhost:4000/parametrizaciones");
+            const data = await res.json();
+            setParametrizaciones(data);
+        } catch (error) {
+            console.error("Error al cargar parametrizaciones:", error);
+        }
+    }, []);
+
+    const cargarCategorias = useCallback(async () => {
+        try {
+            const res = await fetch("http://localhost:4000/categorias");
+            const data = await res.json();
+            setCategorias(data);
+        } catch (error) {
+            console.error("Error al cargar categorías:", error);
+        }
+    }, []);
+
+    // Carga inicial
+    useEffect(() => {
+        const cargar = async () => {
+            await Promise.all([
+                cargarEstadisticas(),
+                cargarVentasRecientes(),
+                cargarParametrizaciones(),
+                cargarCategorias()
+            ]);
+            setCargando(false);
+        };
+        cargar();
+    }, [cargarEstadisticas, cargarVentasRecientes, cargarParametrizaciones, cargarCategorias]);
+
+    // Cuando cambia el periodo
+    useEffect(() => {
         cargarEstadisticas();
-      } else {
-        alert("Error al actualizar parámetro");
-      }
-    } catch (error) {
-      console.error("Error al actualizar parámetro:", error);
-      alert("Error al actualizar parámetro");
+        cargarVentasRecientes();
+    }, [periodo, cargarEstadisticas, cargarVentasRecientes]);
+
+
+
+
+
+
+    // Funciones de acciones
+    const handleActualizarParametro = async (id, nuevoValor) => {
+        try {
+            const res = await fetch(`http://localhost:4000/parametrizaciones/${id}`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ valor: parseFloat(nuevoValor) })
+            });
+            const data = await res.json();
+            if (data.success) {
+                alert("Parámetro actualizado correctamente");
+                cargarParametrizaciones();
+                cargarEstadisticas();
+            } else {
+                alert("Error al actualizar parámetro");
+            }
+        } catch (error) {
+            console.error("Error al actualizar parámetro:", error);
+            alert("Error al actualizar parámetro");
+        }
+    };
+
+
+
+
+
+
+    const handleExportarPDF = () => {
+        window.print();
+    };
+
+    const formatearFecha = (fecha) => new Date(fecha).toLocaleDateString("es-PE");
+    const formatearHora = (fecha) =>
+        new Date(fecha).toLocaleTimeString("es-PE", { hour: "2-digit", minute: "2-digit" });
+
+
+    // 🔥 Hooks SIEMPRE deben ir ANTES de cualquier return condicional
+    const cargarSeriesVentas = useCallback(async () => {
+        try {
+            setCargandoSeries(true);
+            const res = await fetch(`http://localhost:4000/dashboard/ventas-series?periodo=${periodo}`);
+
+            if (!res.ok) {
+                console.warn("ventas-series no disponible:", res.status);
+                setSerieVentas([]);
+                setCargandoSeries(false);
+                return;
+            }
+
+            const data = await res.json();
+
+            const formatted = data.map(d => {
+                const dt = new Date(d.periodo);
+                let label = "";
+
+                if (periodo === "dia") {
+                    label = dt.getHours().toString().padStart(2, "0") + ":00";
+                } else if (periodo === "año") {
+                    label = dt.toLocaleString("es-PE", { month: "short" });
+                } else {
+                    label = dt.getDate().toString().padStart(2, "0");
+                }
+
+                return { label, total: d.total };
+            });
+
+            setSerieVentas(formatted);
+        } catch (error) {
+            console.error(error);
+            setSerieVentas([]);
+        } finally {
+            setCargandoSeries(false);
+        }
+    }, [periodo]);
+
+
+    const cargarProductosTop = useCallback(async () => {
+        try {
+            const res = await fetch(`http://localhost:4000/dashboard/productos-mas-vendidos?periodo=${periodo}&limit=8`);
+            if (!res.ok) {
+                console.warn("productos-mas-vendidos no disponible");
+                setProductosMasVendidos([]);
+                return;
+            }
+
+            const data = await res.json();
+            setProductosMasVendidos(data);
+        } catch (error) {
+            console.error(error);
+            setProductosMasVendidos([]);
+        }
+    }, [periodo]);
+
+
+    // Estos effects TAMBIÉN deben ir antes del return
+    useEffect(() => {
+        cargarSeriesVentas();
+        cargarProductosTop();
+    }, [periodo, cargarSeriesVentas, cargarProductosTop]);
+
+
+
+
+
+    if (cargando) {
+        return <div style={{ padding: "20px", fontSize: "18px" }}>Cargando dashboard...</div>;
     }
-  };
-
-  const handleCrearPromocion = async (e) => {
-    e.preventDefault();
-    try {
-      const body = {
-        categoria_id: parseInt(formPromocion.categoria_id),
-        porcentaje_descuento: parseFloat(formPromocion.porcentaje_descuento),
-        fecha_inicio: formPromocion.fecha_inicio,
-        fecha_fin: formPromocion.fecha_fin
-      };
-
-      const res = await fetch("http://localhost:4000/promociones", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body)
-      });
-
-      if (!res.ok) {
-        const errorData = await res.json();
-        alert(errorData.message || `Error ${res.status}: ${res.statusText}`);
-        return;
-      }
-
-      const data = await res.json();
-      if (data.success) {
-        alert("Promoción creada correctamente");
-        setMostrarFormPromocion(false);
-        setFormPromocion({
-          categoria_id: "",
-          porcentaje_descuento: "",
-          fecha_inicio: "",
-          fecha_fin: ""
-        });
-        cargarPromociones();
-      } else {
-        alert(data.message || "Error al crear promoción");
-      }
-    } catch (error) {
-      console.error("Error al crear promoción:", error);
-      alert("Error al crear promoción: " + error.message);
-    }
-  };
-
-  const handleEliminarPromocion = async (id) => {
-    if (!window.confirm("¿Está seguro de eliminar esta promoción?")) return;
-
-    try {
-      const res = await fetch(`http://localhost:4000/promociones/${id}`, { method: "DELETE" });
-      const data = await res.json();
-      if (data.success) {
-        alert("Promoción eliminada correctamente");
-        cargarPromociones();
-      } else {
-        alert("Error al eliminar promoción");
-      }
-    } catch (error) {
-      console.error("Error al eliminar promoción:", error);
-      alert("Error al eliminar promoción");
-    }
-  };
-
-  const handleExportarPDF = () => {
-    window.print();
-  };
-
-  const formatearFecha = (fecha) => new Date(fecha).toLocaleDateString("es-PE");
-  const formatearHora = (fecha) =>
-    new Date(fecha).toLocaleTimeString("es-PE", { hour: "2-digit", minute: "2-digit" });
 
 
-  if (cargando) {
-    return <div style={{ padding: "20px", fontSize: "18px" }}>Cargando dashboard...</div>;
-  }
 
-  
+
+
 
 
 
@@ -290,7 +332,14 @@ function Dashboard() {
 
                     {/* Tasa de Crecimiento */}
                     <div style={styles.metrica}>
-                        <h3 style={styles.metricaTitulo}>Tasa de Crecimiento Mensual</h3>
+                        <h3 style={styles.metricaTitulo}>
+                            {periodo === "dia"
+                                ? "Tasa de Crecimiento Diaria"
+                                : periodo === "mes"
+                                    ? "Tasa de Crecimiento Mensual"
+                                    : "Tasa de Crecimiento Anual"}
+                        </h3>
+
                         <div
                             style={{
                                 ...styles.metricaValor,
@@ -325,9 +374,113 @@ function Dashboard() {
                 </div>
             </div>
 
+
+            {/* Gráfico pastel de categorías más vendidas */}
+            <div style={{ width: "100%", height: 320, marginTop: 20 }}>
+                <h3>Categorías más vendidas</h3>
+
+                {estadisticas?.categorias_mas_vendidas?.length > 0 ? (
+                    <ResponsiveContainer width="100%" height="100%">
+                        <PieChart>
+                            <Pie
+                                data={estadisticas.categorias_mas_vendidas.map(c => ({
+                                    categoria: c.categoria,
+                                    unidades:
+                                        Number(c.unidades) ||
+                                        Number(c.unidades_vendidas) ||
+                                        Number(c.total_vendido) ||
+                                        Number(c.cantidad) ||
+                                        0
+                                }))}
+                                dataKey="unidades"
+                                nameKey="categoria"
+                                outerRadius={140}
+                                label
+                            >
+                                {estadisticas.categorias_mas_vendidas.map((entry, index) => (
+                                    <Cell
+                                        key={index}
+                                        fill={[
+                                            "#0088FE", "#00C49F", "#FFBB28", "#FF8042",
+                                            "#A569BD", "#5DADE2", "#48C9B0", "#F4D03F",
+                                            "#DC7633", "#EC7063", "#7F8C8D", "#2ECC71",
+                                            "#1ABC9C", "#3498DB", "#9B59B6", "#E67E22"
+                                        ][index % 16]}
+                                    />
+                                ))}
+                            </Pie>
+                            <Tooltip />
+                            <Legend />
+                        </PieChart>
+                    </ResponsiveContainer>
+                ) : (
+                    <div>No hay datos disponibles</div>
+                )}
+            </div>
+
+
+
+
+
+
+
+
+
+            <div style={{ width: "100%", height: 320, marginTop: 20 }}>
+                <h3>Productos más vendidos</h3>
+                {productosMasVendidos.length === 0 ? (
+                    <div>No hay datos de productos</div>
+                ) : (
+                    <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={productosMasVendidos}>
+                            <CartesianGrid strokeDasharray="3 3" />
+                            <XAxis dataKey="producto" />
+                            <YAxis />
+                            <Tooltip />
+
+                            <Bar dataKey="unidades">
+                                {productosMasVendidos.map((entry, index) => (
+                                    <Cell
+                                        key={`cell-${index}`}
+                                        fill={[
+                                            "#0088FE",
+                                            "#00C49F",
+                                            "#FFBB28",
+                                            "#FF8042",
+                                            "#A569BD",
+                                            "#5DADE2",
+                                            "#48C9B0",
+                                            "#F4D03F",
+                                            "#DC7633",
+                                            "#EC7063",
+                                            "#7F8C8D",
+                                            "#2ECC71",
+                                            "#1ABC9C",
+                                            "#3498DB",
+                                            "#9B59B6",
+                                            "#E67E22"
+                                        ][index % 16]}
+                                    />
+                                ))}
+                            </Bar>
+                        </BarChart>
+                    </ResponsiveContainer>
+                )}
+            </div>
+            <br></br>
+            <br></br>
+            <br></br>
+
+
             {/* 2. PANEL DE VENTAS RECIENTES */}
             <div style={styles.seccion}>
-                <h2 style={styles.tituloSeccion}>Ventas Recientes (Hoy)</h2>
+
+                <h2 style={styles.tituloSeccion}>
+                    Ventas Recientes (
+                    {periodo === "dia" ? "Hoy" : periodo === "mes" ? "Este Mes" : "Este Año"}
+                    )
+                </h2>
+
                 <table style={styles.tabla}>
                     <thead>
                         <tr>
@@ -339,22 +492,34 @@ function Dashboard() {
                             <th>Acciones</th>
                         </tr>
                     </thead>
+
                     <tbody>
                         {ventasRecientes.length === 0 ? (
                             <tr>
-                                <td colSpan="6" style={styles.sinDatos}>No hay ventas hoy</td>
+                                <td colSpan="6" style={styles.sinDatos}>
+                                    No hay ventas {periodo === "dia"
+                                        ? "hoy"
+                                        : periodo === "mes"
+                                            ? "este mes"
+                                            : "este año"}
+                                </td>
                             </tr>
                         ) : (
                             ventasRecientes.map(venta => (
                                 <tr key={venta.id_pedido}>
+
+                                    {/* Fecha y hora formateadas */}
                                     <td>{formatearFecha(venta.fecha_pedido)}</td>
                                     <td>{formatearHora(venta.fecha_pedido)}</td>
+
                                     <td>S/ {parseFloat(venta.monto).toFixed(2)}</td>
                                     <td>{venta.cliente_nombre}</td>
                                     <td>{venta.metodo_pago}</td>
                                     <td>
                                         <button
-                                            onClick={() => navigate(`/dashboard/venta/${venta.id_pedido}`)}
+                                            onClick={() =>
+                                                navigate(`/dashboard/venta/${venta.id_pedido}`)
+                                            }
                                             style={styles.btnVerDetalle}
                                             className="no-print"
                                         >
@@ -366,28 +531,8 @@ function Dashboard() {
                         )}
                     </tbody>
                 </table>
-                {paginacionVentas.total_paginas > 1 && (
-                    <div style={styles.paginacion} className="no-print">
-                        <button
-                            onClick={() => setPaginaVentas(p => Math.max(1, p - 1))}
-                            disabled={paginaVentas === 1}
-                            style={styles.btnPagina}
-                        >
-                            Anterior
-                        </button>
-                        <span style={styles.infoPagina}>
-                            Página {paginacionVentas.pagina_actual} de {paginacionVentas.total_paginas}
-                        </span>
-                        <button
-                            onClick={() => setPaginaVentas(p => Math.min(paginacionVentas.total_paginas, p + 1))}
-                            disabled={paginaVentas === paginacionVentas.total_paginas}
-                            style={styles.btnPagina}
-                        >
-                            Siguiente
-                        </button>
-                    </div>
-                )}
             </div>
+
 
             {/* 3. PARAMETRIZACIÓN DE INDICADORES */}
             <div style={styles.seccion}>
@@ -433,138 +578,11 @@ function Dashboard() {
                 </div>
             </div>
 
-            {/* 4. GESTIÓN DE PROMOCIONES */}
-            <div style={styles.seccion}>
-                <div style={styles.headerSeccion}>
-                    <h2 style={styles.tituloSeccion}>Gestión de Promociones</h2>
-                    <button
-                        onClick={() => setMostrarFormPromocion(!mostrarFormPromocion)}
-                        style={styles.btnNuevo}
-                        className="no-print"
-                    >
-                        {mostrarFormPromocion ? 'Cancelar' : '+ Nueva Promoción'}
-                    </button>
-                </div>
 
-                {mostrarFormPromocion && (
-                    <div className="no-print">
-                        <form onSubmit={handleCrearPromocion} style={styles.formPromocion}>
-                            <div style={styles.formGrid}>
-                                <div>
-                                    <label style={styles.label}>Categoría *</label>
-                                    <select
-                                        value={formPromocion.categoria_id}
-                                        onChange={(e) => setFormPromocion({ ...formPromocion, categoria_id: e.target.value })}
-                                        style={styles.select}
-                                        required
-                                    >
-                                        <option value="">Seleccione una categoría</option>
-                                        {categorias.map(cat => (
-                                            <option key={cat.id_categoria} value={cat.id_categoria}>
-                                                {cat.nombre}
-                                            </option>
-                                        ))}
-                                    </select>
-                                </div>
-                                <div>
-                                    <label style={styles.label}>% Descuento *</label>
-                                    <input
-                                        type="number"
-                                        min="0"
-                                        max="100"
-                                        step="0.01"
-                                        value={formPromocion.porcentaje_descuento}
-                                        onChange={(e) => setFormPromocion({ ...formPromocion, porcentaje_descuento: e.target.value })}
-                                        style={styles.input}
-                                        required
-                                    />
-                                </div>
-                                <div>
-                                    <label style={styles.label}>Fecha Inicio *</label>
-                                    <input
-                                        type="date"
-                                        value={formPromocion.fecha_inicio}
-                                        onChange={(e) => setFormPromocion({ ...formPromocion, fecha_inicio: e.target.value })}
-                                        style={styles.input}
-                                        required
-                                    />
-                                </div>
-                                <div>
-                                    <label style={styles.label}>Fecha Fin *</label>
-                                    <input
-                                        type="date"
-                                        value={formPromocion.fecha_fin}
-                                        onChange={(e) => setFormPromocion({ ...formPromocion, fecha_fin: e.target.value })}
-                                        style={styles.input}
-                                        required
-                                    />
-                                </div>
-                            </div>
-                            <button type="submit" style={styles.btnGuardar}>Crear Promoción</button>
-                        </form>
-                    </div>
-                )}
 
-                <h3 style={styles.subtitulo}>Promociones Activas</h3>
-                <table style={styles.tabla}>
-                    <thead>
-                        <tr>
-                            <th>% Descuento</th>
-                            <th>Categoría</th>
-                            <th>Fecha Inicio</th>
-                            <th>Fecha Fin</th>
-                            <th>Acciones</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {promociones.length === 0 ? (
-                            <tr>
-                                <td colSpan="5" style={styles.sinDatos}>No hay promociones activas</td>
-                            </tr>
-                        ) : (
-                            promociones.map(promo => (
-                                <tr key={promo.id_promocion}>
-                                    <td>{promo.porcentaje_descuento}%</td>
-                                    <td>{promo.categoria_nombre}</td>
-                                    <td>{formatearFecha(promo.fecha_inicio)}</td>
-                                    <td>{formatearFecha(promo.fecha_fin)}</td>
-                                    <td>
-                                        <button
-                                            onClick={() => handleEliminarPromocion(promo.id_promocion)}
-                                            style={styles.btnEliminar}
-                                            className="no-print"
-                                        >
-                                            Eliminar
-                                        </button>
-                                    </td>
-                                </tr>
-                            ))
-                        )}
-                    </tbody>
-                </table>
-                {paginacionPromociones.total_paginas > 1 && (
-                    <div style={styles.paginacion} className="no-print">
-                        <button
-                            onClick={() => setPaginaPromociones(p => Math.max(1, p - 1))}
-                            disabled={paginaPromociones === 1}
-                            style={styles.btnPagina}
-                        >
-                            Anterior
-                        </button>
-                        <span style={styles.infoPagina}>
-                            Página {paginacionPromociones.pagina_actual} de {paginacionPromociones.total_paginas}
-                        </span>
-                        <button
-                            onClick={() => setPaginaPromociones(p => Math.min(paginacionPromociones.total_paginas, p + 1))}
-                            disabled={paginaPromociones === paginacionPromociones.total_paginas}
-                            style={styles.btnPagina}
-                        >
-                            Siguiente
-                        </button>
-                    </div>
-                )}
-            </div>
+
         </div>
+
     );
 }
 
